@@ -1,0 +1,2 @@
+# Q: how to let `yay` use `make -j4` while building?
+export MAKEFLAGS="-j4"
