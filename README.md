@@ -1,6 +1,8 @@
 # gpt4o.nvim
 
-Blazing fast 🚀 code assistant in NeoVim powered by 🤖 GPT-4o, offering intelligent code completion and editing to elevate developer productivity.
+Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o 😎✨, offering intelligent code completion and editing to elevate developer productivity.
+
+<!-- ![](demo.mp4) -->
 
 ## Features
 - Context-aware suggestions 🌍
@@ -22,7 +24,7 @@ You may do this by running:
 python3 -m pip install neovim openai
 ```
 
-So far so good, you should see `OK` in the python3 support when running `:checkhealth`.
+So far, you should see `OK` in the python3 support when running `:checkhealth`.
 
 Now add the following to your `~/.config/nvim/init.vim`, with your plugin manager, [vim-plug](https://github.com/junegunn/vim-plug) for example:
 
@@ -32,9 +34,8 @@ Plug 'archibate/gpt4o.nvim'
 
 Then, run `:PlugInstall` (or whatever your plugin manager name it) in NeoVim.
 
-We are almost done! The only thing remain is to find an LLM provider.
-
 ## LLM providers
+We are almost done! The only thing remain is to find an LLM provider.
 
 ### OpenAI (gpt4o)
 Goto [OpenAI platform](https://platform.openai.com/api-keys), create a new API key. You want to register an OpenAI account if you haven't yet.
@@ -53,7 +54,7 @@ Restart your shell, enter NeoVim and try run `:GPT` and have fun!
 > The plugin will invoke `https://api.openai.com` in the background for you for code completion 😎
 
 ### DeepSeek (deepseek-coder)
-DeepSeek is a Chinese company that specializes in AI-driven programming tools and code assistance solutions. Their slogan is:
+DeepSeek is a Chinese company that specializes in AI-driven programming tools and code assistance solutions, which is kinda Messiah for Chinese students who could't afford an VISA card. Their slogan is:
 
 > Unravel the mystery of AGI with curiosity. Answer the essential question with long-termism 😎
 
@@ -76,15 +77,41 @@ If no `<question>` provided, gpt4o will try to complete and fix possible mistake
 
 If you invoke `:GPT` with no selection, i.e. not in VISUAL mode, gpt4o will only edit the current line of code where cursor located at, a single line.
 
-May also instead invoke `:GPT4` to allow gpt4o editing ± 4 lines of code around the cursor, which is usually the small fraction of code you'd like to edit.
+### `:GPT4`
+
+Invoke `:GPT4` instead, allows gpt4o editing ± 4 lines of code around the cursor, which is usually the small fraction of code you'd like to edit.
 
 > 😂 In case you missed my laughing point: GPT4 = GPT4o with ± 4 lines editing ability 🤣🎉 Hope you find this fun...
+
+Actually, `:GPT4` is just a shortcut for `:-4,+4GPT`, which is Vim's range specifier syntax.
+
+### `:%GPT`
+
+Typing `:%GPT` would allow gpt4o to edit the whole file. Since `%` means 'All lines' in Vim's range specifier syntax.
+
+### `:GPT!`
+
+Invoke `:GPT!` or `:GPT4!` (with bang `!`) will attach the recent terminal output (supports [toggleterm](https://github.com/akinsho/toggleterm.nvim)!), which is typically some annoying error messages, for gpt4o to account into context. This can be useful for example: you run the Python script into an error, then you may switch back to the Python file and type `:%GPT!` to let gpt4o edit and automatically fix the error for you. 🎉
+
+## Key maps
+It's suggested to map your preferred key bindings to quickly invoke gpt4o commands. For example, you might want to add the following lines to your `init.vim`:
+
+```vim
+nnoremap gp :GPT
+vnoremap gp :GPT
+nnoremap gP :GPT!
+vnoremap gP :GPT!
+```
+
+Afterwards you may type `gp<CR>` in VISUAL or NORMAL mode to trigger GPT completion for selected range or current line. And `gP<CR>` if you'd like to attach terminal output.
+
+Together with [nvim-treesitter-textobjects](https://github.com/nvim-treesitter/nvim-treesitter-textobjects) for example, you may type `vafgp<CR>` to let gpt4o edit the current function, and `vacgp<CR>` for the current class, and so on.
 
 ## Configuration
 You can customize the behavior of gpt4o by adding the following to your `init.vim` or `init.lua`:
 
 ```vim
-:GPTSetup {
+:call GPTSetup({
   \ "terminal_history_lines": 100,
   \ "look_back_lines": 180,
   \ "look_ahead_lines": 80,
@@ -102,7 +129,7 @@ You can customize the behavior of gpt4o by adding the following to your `init.vi
   \ "include_usage": v:true,
   \ "include_time": v:true,
   \ "timeout": v:null,
-\ }
+\ })
 ```
 
 ## Contributing

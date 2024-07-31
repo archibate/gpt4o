@@ -302,3 +302,9 @@ class GPT4oPlugin:
             end = num_lines
         range_ = start, end
         self.do_gpt_range(args, range_, bang)
+
+    @neovim.function('GPTSetup')
+    def on_GPTSetup(self, args):
+        assert isinstance(args, dict)
+        for k, v in args:
+            setattr(self.cfg, k, v)
