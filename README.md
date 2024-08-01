@@ -34,6 +34,8 @@ Plug 'archibate/gpt4o.nvim'
 
 Then, run `:PlugInstall` (or whatever your plugin manager name it) in NeoVim.
 
+After that, run `:UpdateRemotePlugins` to setup our python3 plugin (if your plugin manager didn't setup it automatically).
+
 ## LLM providers
 We are almost done! The only thing remain is to find an LLM provider.
 
@@ -52,8 +54,6 @@ export OPENAI_API_KEY="sk-xxxxxxxxxxxxx"
 Restart your shell, enter NeoVim and try run `:GPT` and have fun!
 
 > The plugin will invoke `https://api.openai.com` in the background for you for code completion 😎
-
-If it didn't work, try `:UpdateRemotePlugins` and `:GPT` should be available then.
 
 ### DeepSeek (deepseek-coder)
 DeepSeek is a Chinese company that specializes in AI-driven programming tools and code assistance solutions, which is kinda Messiah for Chinese students who could't afford an VISA card. Their slogan is:
