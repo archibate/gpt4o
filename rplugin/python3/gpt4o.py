@@ -51,6 +51,7 @@ You can only give one reply for each conversation turn.'''
         path: str
         content: str
         type: str = ''
+        score: int = 1
 
     @dataclass
     class Config:
@@ -62,6 +63,7 @@ You can only give one reply for each conversation turn.'''
         model: str = 'auto'
         embedding_model: str = 'auto'
         limit_context_tokens: int = 10000
+        context_chunk_size: int = 20
         max_tokens: Optional[int] = None
         temperature: Optional[float] = None
         frequency_penalty: Optional[float] = None
@@ -219,7 +221,7 @@ You can only give one reply for each conversation turn.'''
         current_content = '\n'.join(current_buffer[:])
         files: list[GPT4oPlugin.File] = []
         for buffer in self.nvim.buffers:
-            if buffer.name:
+            if buffer.valid and buffer.name:
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
                 buf_listed = self.nvim.api.get_option_value('buflisted', {'buf': buffer.number})
                 if not buf_type or buf_type in ['terminal', 'quickfix']:
@@ -234,47 +236,60 @@ You can only give one reply for each conversation turn.'''
                         continue
                     files.append(self.buf_into_file(buffer, content, buf_type))
         files.append(self.buf_into_file(current_buffer, current_content))
+        files[-1].score = 2
         if self.embedding_model:
             inputs: list[str] = []
             sources: list[int] = []
             for fileid, file in enumerate(files):
-                for line in file.content.split('\n'):
+                for line in self.split_content_chunks(file.content):
                     inputs.append(line)
                     sources.append(fileid)
             inputs.append(code_sample)
-            if self.cfg.include_time:
-                t0 = time.monotonic()
-            else:
-                t0 = None
-            response = self.client.embeddings.create(input=inputs, model=self.embedding_model)
-            if self.cfg.include_time:
-                assert t0
-                dt = time.monotonic() - t0
-                self.log(f'total {dt * 1000:.0f} ms @{self.embedding_model}')
-            self.check_price(response.usage, self.embedding_model)
-            sample = response.data[-1]
-            contents: list[list[str]] = [[] for _ in range(len(files))]
-            similiarities = [0.0 for _ in range(len(sources))]
-            for i, output in enumerate(response.data[:-1]):
-                similiarities[i] = self.cosine_similiarity(output.embedding, sample.embedding)
-            indices = [i for i in range(len(similiarities))]
-            indices.sort(key=lambda i: similiarities[i], reverse=True)
             tokens = self.count_tokens(inputs)
-            total_tokens = 0
-            for i in indices:
-                fileid = sources[i]
-                content = inputs[i]
-                total_tokens += tokens[i]
-                if total_tokens >= self.cfg.limit_context_tokens:
-                    break
-                contents[fileid].append(inputs[i])
-            new_files: list[GPT4oPlugin.File] = []
-            for i, content in enumerate(contents):
-                file = files[i]
-                if content:
-                    file.content = '\n\n...\n\n'.join(content)
-                    new_files.append(file)
+            if sum(tokens) >= self.cfg.limit_context_tokens:
+                if self.cfg.include_time:
+                    t0 = time.monotonic()
+                else:
+                    t0 = None
+                response = self.client.embeddings.create(input=inputs, model=self.embedding_model)
+                if self.cfg.include_time:
+                    assert t0
+                    dt = time.monotonic() - t0
+                    self.log(f'total {dt * 1000:.0f} ms @{self.embedding_model}')
+                self.check_price(response.usage, self.embedding_model)
+                sample = response.data[-1]
+                contents: list[set[str]] = [set() for _ in range(len(files))]
+                similiarities = [0.0 for _ in range(len(sources))]
+                for i, output in enumerate(response.data[:-1]):
+                    fileid = sources[i]
+                    similiarities[i] = self.cosine_similiarity(output.embedding, sample.embedding) ** (1 / files[fileid].score)
+                indices = [i for i in range(len(similiarities))]
+                indices.sort(key=lambda i: similiarities[i], reverse=True)
+                total_tokens = 0
+                input_oks = [False for _ in range(len(indices))]
+                for i in indices:
+                    content = inputs[i]
+                    total_tokens += tokens[i]
+                    if total_tokens >= self.cfg.limit_context_tokens:
+                        break
+                    input_oks[i] = True
+                for i, ok in enumerate(input_oks):
+                    if ok:
+                        fileid = sources[i]
+                        contents[fileid].add(inputs[i])
+                new_files: list[GPT4oPlugin.File] = []
+                for i, content in enumerate(contents):
+                    file = files[i]
+                    if content:
+                        if file.content != '\n'.join(content):
+                            file.content = '\n\n...\n\n'.join(content)
+                        new_files.append(file)
+                files = new_files
         return files
+
+    def split_content_chunks(self, content):
+        lines = content.split('\n')
+        return ['\n'.join(lines[i:i+self.cfg.context_chunk_size]) for i in range(0, len(lines), self.cfg.context_chunk_size)]
 
     def count_tokens(self, inputs: list[str]) -> list[int]:
         return [(len(input.encode('utf-8')) + 3) // 4 for input in inputs]
