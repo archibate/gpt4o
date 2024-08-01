@@ -6,6 +6,7 @@ Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o ✨, offering intel
 
 ## Features
 - Context-aware suggestions 🌍
+- Project files accounted 📄
 - Real-time code completion ⚡
 - Incremental streaming result ⏳
 - Edit existing code bases 🛠️
@@ -98,7 +99,7 @@ Invoke `:GPT @term` or `:GPT4 @term` (with special argument `@term`) will attach
 ## Key maps
 It's suggested to map your preferred key bindings to quickly invoke gpt4o commands. For example, you might want to add the following lines to your `init.vim`:
 
-```bim
+```vim
 nnoremap gp :GPT<Space>
 vnoremap gp :GPT<Space>
 nnoremap <C-Space> <Cmd>GPT<CR>
@@ -131,16 +132,15 @@ You can customize the behavior of gpt4o by adding the following to your `init.vi
 
 ```vim
 :call GPTSetup({
-  \ "terminal_history_lines": 100,
-  \ "look_back_lines": 150,
-  \ "look_ahead_lines": 80,
-  \ "limit_attach_lines": 400,
   \ "extra_range_lines": 4,
   \ "api_key": v:null,
   \ "base_url": v:null,
   \ "organization": v:null,
   \ "project": v:null,
   \ "model": "auto",
+  \ "embedding_model": "auto",
+  \ "limit_context_tokens": 10000,
+  \ "context_chunk_size": 20,
   \ "max_tokens": v:null,
   \ "temperature": v:null,
   \ "frequency_penalty": v:null,

@@ -82,7 +82,7 @@ You can only give one reply for each conversation turn.'''
     def embedding_model(self) -> str:
         if self.cfg.embedding_model == 'auto':
             if 'openai' in self.client.base_url.host:
-                return 'embedding-3-small'
+                return 'text-embedding-3-small'
             else:
                 return ''
         return self.cfg.embedding_model
@@ -99,13 +99,13 @@ You can only give one reply for each conversation turn.'''
             )
         return self._real_client
 
-    def log(self, line):
+    def log(self, line: str):
         with open('/tmp/gpt4o.log', 'a') as f:
             print(line, file=f)
             print('======', file=f)
 
-    def check_price(self, model, usage):
-        if not self.cfg.include_usage:
+    def check_price(self, usage, model: str):
+        if not self.cfg.include_usage or not usage:
             return
         pricing = {
             'gpt-4o': (5, 15),
@@ -120,7 +120,7 @@ You can only give one reply for each conversation turn.'''
         }
         if model in pricing:
             prompt_price, completion_price = pricing[model]
-            price = (usage.prompt_tokens * prompt_price + usage.completion_tokens * completion_price) / 1000000
+            price = (usage.prompt_tokens * prompt_price + getattr(usage, 'completion_tokens', 0) * completion_price) / 1000000
             self.log(f'${price:.6f} @{model}')
 
     def check_time(self, sequence: Callable[[], Iterable[T]], model: str) -> Iterable[T]:
@@ -162,7 +162,7 @@ You can only give one reply for each conversation turn.'''
             )
             for chunk in self.check_time(completion, model):
                 if chunk.usage:
-                    self.check_price(model, chunk.usage)
+                    self.check_price(chunk.usage, model)
                 if chunk.choices:
                     content = chunk.choices[0].delta.content
                     if content:
@@ -221,7 +221,7 @@ You can only give one reply for each conversation turn.'''
         current_content = '\n'.join(current_buffer[:])
         files: list[GPT4oPlugin.File] = []
         for buffer in self.nvim.buffers:
-            if buffer.valid and buffer.name:
+            if buffer.valid and buffer.name and buffer.number != self.nvim.current.buffer.number:
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
                 buf_listed = self.nvim.api.get_option_value('buflisted', {'buf': buffer.number})
                 if not buf_type or buf_type in ['terminal', 'quickfix']:
@@ -234,7 +234,9 @@ You can only give one reply for each conversation turn.'''
                     ok = buf_listed or re.search(rf'\b{re.escape(current_name)}\b', content) or re.search(rf'\b{re.escape(buffer_name)}\b', current_content)
                     if not ok:
                         continue
+                    self.log(f'adding file: {buffer.name}')
                     files.append(self.buf_into_file(buffer, content, buf_type))
+        self.log(f'current file: {current_buffer.name}')
         files.append(self.buf_into_file(current_buffer, current_content))
         files[-1].score = 2
         if self.embedding_model:
@@ -255,10 +257,10 @@ You can only give one reply for each conversation turn.'''
                 if self.cfg.include_time:
                     assert t0
                     dt = time.monotonic() - t0
-                    self.log(f'total {dt * 1000:.0f} ms @{self.embedding_model}')
+                    self.log(f'embedding {dt * 1000:.0f} ms @{self.embedding_model}')
                 self.check_price(response.usage, self.embedding_model)
                 sample = response.data[-1]
-                contents: list[set[str]] = [set() for _ in range(len(files))]
+                contents: list[list[str]] = [[] for _ in range(len(files))]
                 similiarities = [0.0 for _ in range(len(sources))]
                 for i, output in enumerate(response.data[:-1]):
                     fileid = sources[i]
@@ -276,7 +278,7 @@ You can only give one reply for each conversation turn.'''
                 for i, ok in enumerate(input_oks):
                     if ok:
                         fileid = sources[i]
-                        contents[fileid].add(inputs[i])
+                        contents[fileid].append(inputs[i])
                 new_files: list[GPT4oPlugin.File] = []
                 for i, content in enumerate(contents):
                     file = files[i]
