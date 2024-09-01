@@ -1,5 +1,4 @@
 #include <iostream>
-#include <cstring>
 #include <immintrin.h>
 
 void saxpy(int n, float a, const float* x, float* y) {

@@ -9,11 +9,8 @@ import math
 import time
 import re
 
-
-@neovim.plugin
-class GPT4oPlugin:
-    DEFAULT_OPENAI_MODEL = 'gpt-4o'
-    INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
+DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
 
 Rules:
 1. Return only the modified code, with no additional text or explanations.
@@ -30,7 +27,7 @@ Rules:
 12. Assume that any necessary dependencies or libraries are already imported or available.
 
 IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
-    INSTRUCTION_CHAT = '''You are an AI programming assistant.
+INSTRUCTION_CHAT = '''You are an AI programming assistant.
 Follow the user's requirements carefully & to the letter.
 Your responses should be informative and logical.
 You should always adhere to technical information.
@@ -46,46 +43,63 @@ Avoid wrapping the whole response in triple backticks.
 The user works in an IDE of NeoVim which has a concept for editors with open files, integrated language support, and output pane that shows the output of running the code as well as an integrated terminal.
 You can only give one reply for each conversation turn.'''
 
-    @dataclass
-    class File:
-        path: str
-        content: str
-        type: str = ''
-        score: int = 1
 
-    @dataclass
-    class Config:
-        extra_range_lines: int = 4
-        api_key: Optional[str] = None
-        base_url: Optional[str] = None
-        organization: Optional[str] = None
-        project: Optional[str] = None
-        model: str = 'auto'
-        embedding_model: str = 'auto'
-        limit_context_tokens: int = 10000
-        context_chunk_size: int = 20
-        max_tokens: Optional[int] = None
-        temperature: Optional[float] = None
-        frequency_penalty: Optional[float] = None
-        presence_penalty: Optional[float] = None
-        include_usage: bool = True
-        include_time: bool = True
-        timeout: Optional[float] = None
+@dataclass
+class File:
+    path: str
+    content: str
+    type: str = ''
+    score: int = 1
 
+@dataclass
+class Config:
+    extra_range_lines: int = 4
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    organization: Optional[str] = None
+    project: Optional[str] = None
+    model: str = 'auto'
+    embedding_model: str = 'auto'
+    limit_context_tokens: int = 1000
+    context_chunk_tokens: int = 400
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    include_usage: bool = True
+    include_time: bool = True
+    timeout: Optional[float] = None
+
+@neovim.plugin
+class GPT4oPlugin:
     def __init__(self, nvim: neovim.Nvim):
         self.nvim = nvim
         self.running = False
-        self.cfg = self.Config()
+        self.cfg = Config()
         self._real_client = None
+        self._real_fastembed_model = None
 
     @property
     def embedding_model(self) -> str:
         if self.cfg.embedding_model == 'auto':
-            if 'openai' in self.client.base_url.host:
-                return 'text-embedding-3-small'
-            else:
-                return ''
+            try:
+                import fastembed
+                return 'fastembed'
+            except ImportError:
+                if 'openai' in self.client.base_url.host:
+                    return 'text-embedding-3-small'
+                else:
+                    return ''
         return self.cfg.embedding_model
+
+    def calculate_embeddings(self, inputs: list[str]) -> list[list[float]]:
+        if self.embedding_model == 'fastembed':
+            return [list(data) for data in self.fastembed_model.embed(inputs)]
+        else:
+            assert self.embedding_model
+            response = self.client.embeddings.create(input=inputs, model=self.embedding_model)
+            self.check_price(response.usage, self.embedding_model)
+            return [embedding.embedding for embedding in response.data]
 
     @property
     def client(self):
@@ -98,6 +112,13 @@ You can only give one reply for each conversation turn.'''
                 timeout=self.cfg.timeout,
             )
         return self._real_client
+
+    @property
+    def fastembed_model(self):
+        if not self._real_fastembed_model:
+            import fastembed
+            self._real_fastembed_model = fastembed.TextEmbedding()
+        return self._real_fastembed_model
 
     def log(self, line: str):
         with open('/tmp/gpt4o.log', 'a') as f:
@@ -136,7 +157,7 @@ You can only give one reply for each conversation turn.'''
         assert start_t
         total_time = end_t - start_t
         latency_time = (first_chunk_t or start_t) - start_t
-        self.log(f'total {total_time * 1000:.0f} ms, latency {latency_time * 1000:.0f} ms @{model}')
+        self.log(f'[FINISHED] total {total_time * 1000:.0f} ms, latency {latency_time * 1000:.0f} ms @{model}')
 
     def streaming_response(self, question: str, instruction: str) -> Iterable[str]:
         try:
@@ -145,7 +166,7 @@ You can only give one reply for each conversation turn.'''
                 if 'deepseek' in self.client.base_url.host:
                     model = 'deepseek-coder'
                 else:
-                    model = self.DEFAULT_OPENAI_MODEL
+                    model = DEFAULT_OPENAI_MODEL
             self.log(question)
             completion = lambda: self.client.chat.completions.create(
                 model=model,
@@ -212,14 +233,20 @@ You can only give one reply for each conversation turn.'''
         else:
             file_type = self.nvim.api.get_option_value('filetype', {'buf': buffer.number})
             path = buffer.name
-        return self.File(path=path, content=content, type=file_type)
+        return File(path=path, content=content, type=file_type)
 
-    def referenced_files(self, code_sample: str) -> list[File]:
+    def referenced_files(self, code_sample: str, question: str) -> list[File]:
+        files = self.get_all_files()
+        if self.embedding_model:
+            files = self.filter_similiar_chunks(code_sample, question, files)
+        return files
+
+    def get_all_files(self) -> list[File]:
         current_buffer = self.nvim.current.buffer
         current_name = pathlib.Path(current_buffer.name).parts[-1]
         current_name = current_name.rsplit('.', maxsplit=1)[0]
         current_content = '\n'.join(current_buffer[:])
-        files: list[GPT4oPlugin.File] = []
+        files: list[File] = []
         for buffer in self.nvim.buffers:
             if buffer.valid and buffer.name and buffer.number != self.nvim.current.buffer.number:
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
@@ -232,72 +259,101 @@ You can only give one reply for each conversation turn.'''
                     else:
                         buffer_name = buf_type
                     ok = buf_listed or re.search(rf'\b{re.escape(current_name)}\b', content) or re.search(rf'\b{re.escape(buffer_name)}\b', current_content)
-                    if not ok:
-                        continue
-                    self.log(f'adding file: {buffer.name}')
-                    files.append(self.buf_into_file(buffer, content, buf_type))
+                    if ok:
+                        self.log(f'adding file: {buffer.name}')
+                        files.append(self.buf_into_file(buffer, content, buf_type))
         self.log(f'current file: {current_buffer.name}')
         files.append(self.buf_into_file(current_buffer, current_content))
         files[-1].score = 2
-        if self.embedding_model:
-            inputs: list[str] = []
-            sources: list[int] = []
-            for fileid, file in enumerate(files):
-                for line in self.split_content_chunks(file.content):
-                    inputs.append(line)
-                    sources.append(fileid)
-            inputs.append(code_sample)
-            tokens = self.count_tokens(inputs)
-            if sum(tokens) >= self.cfg.limit_context_tokens:
-                if self.cfg.include_time:
-                    t0 = time.monotonic()
-                else:
-                    t0 = None
-                response = self.client.embeddings.create(input=inputs, model=self.embedding_model)
-                if self.cfg.include_time:
-                    assert t0
-                    dt = time.monotonic() - t0
-                    self.log(f'embedding {dt * 1000:.0f} ms @{self.embedding_model}')
-                self.check_price(response.usage, self.embedding_model)
-                sample = response.data[-1]
-                contents: list[list[str]] = [[] for _ in range(len(files))]
-                similiarities = [0.0 for _ in range(len(sources))]
-                for i, output in enumerate(response.data[:-1]):
-                    fileid = sources[i]
-                    similiarities[i] = self.cosine_similiarity(output.embedding, sample.embedding) ** (1 / files[fileid].score)
-                indices = [i for i in range(len(similiarities))]
-                indices.sort(key=lambda i: similiarities[i], reverse=True)
-                total_tokens = 0
-                input_oks = [False for _ in range(len(indices))]
-                for i in indices:
-                    content = inputs[i]
-                    total_tokens += tokens[i]
-                    if total_tokens >= self.cfg.limit_context_tokens:
-                        break
-                    input_oks[i] = True
-                for i, ok in enumerate(input_oks):
-                    if ok:
-                        fileid = sources[i]
-                        contents[fileid].append(inputs[i])
-                new_files: list[GPT4oPlugin.File] = []
-                for i, content in enumerate(contents):
-                    file = files[i]
-                    if content:
-                        if file.content != '\n'.join(content):
-                            file.content = '\n\n...\n\n'.join(content)
-                        new_files.append(file)
-                files = new_files
         return files
 
-    def split_content_chunks(self, content):
+    def filter_similiar_chunks(self, code_sample: str, question: str, files: list[File]):
+        inputs: list[str] = []
+        sources: list[int] = []
+        for fileid, file in enumerate(files):
+            for line in self.split_content_chunks(file.content):
+                line = line.rstrip().lstrip('\n')
+                if line:
+                    inputs.append(line)
+                    sources.append(fileid)
+        prompt = code_sample + '\n' + question
+        inputs.append(prompt.rstrip().lstrip('\n'))
+        # self.log(f'all chunks:\n{'\n--------\n'.join(inputs)}')
+        self.log(f'splited into {len(inputs)} chunks')
+        tokens = self.count_tokens(inputs)
+        if sum(tokens) >= self.cfg.limit_context_tokens:
+            # self.log(f'tokens {sum(tokens)} >= {self.cfg.limit_context_tokens}, clipping')
+            if self.cfg.include_time:
+                t0 = time.monotonic()
+            else:
+                t0 = None
+            response = self.calculate_embeddings(inputs)
+            if self.cfg.include_time:
+                assert t0
+                dt = time.monotonic() - t0
+                self.log(f'embedding {dt * 1000:.0f} ms @{self.embedding_model}')
+            sample = response[-1]
+            contents: list[list[str]] = [[] for _ in range(len(files))]
+            similiarities = [0.0 for _ in range(len(sources))]
+            for i, output in enumerate(response[:-1]):
+                fileid = sources[i]
+                similiarities[i] = self.cosine_similiarity(output, sample) ** (1 / files[fileid].score)
+            indices = [i for i in range(len(similiarities))]
+            indices.sort(key=lambda i: similiarities[i], reverse=True)
+            total_tokens = 0
+            input_oks = [False for _ in range(len(indices))]
+            for i in indices:
+                content = inputs[i]
+                total_tokens += tokens[i]
+                if total_tokens >= self.cfg.limit_context_tokens:
+                    break
+                input_oks[i] = True
+            for i, ok in enumerate(input_oks):
+                if ok:
+                    fileid = sources[i]
+                    contents[fileid].append(inputs[i])
+            new_files: list[File] = []
+            for i, content in enumerate(contents):
+                file = files[i]
+                if content:
+                    if file.content != '\n'.join(content):
+                        file.content = '\n\n...\n\n'.join(content)
+                    new_files.append(file)
+            files = new_files
+        return files
+
+    def split_content_chunks(self, content: str) -> list[str]:
         lines = content.split('\n')
-        return ['\n'.join(lines[i:i+self.cfg.context_chunk_size]) for i in range(0, len(lines), self.cfg.context_chunk_size)]
+        result: list[str] = []
+        tokens = self.count_tokens(lines)
+        accum_lines: list[str] = []
+        accum_tokens = 0
+        for line, ntoken in zip(lines, tokens):
+            accum_lines.append(line)
+            accum_tokens += ntoken
+            limit = self.cfg.context_chunk_tokens
+            if not line.strip():
+                limit *= 2
+            if accum_tokens >= limit:
+                result.append('\n'.join(accum_lines))
+                accum_lines = []
+                accum_tokens = 0
+        if accum_lines:
+            result.append('\n'.join(accum_lines))
+        return result
 
     def count_tokens(self, inputs: list[str]) -> list[int]:
-        return [(len(input.encode('utf-8')) + 3) // 4 for input in inputs]
+        try:
+            import tiktoken
+            encoding = tiktoken.encoding_for_model(DEFAULT_OPENAI_MODEL)
+            tokens = encoding.encode_batch(inputs, disallowed_special=())
+            return [len(t) for t in tokens]
+        except ImportError:
+            return [(len(input.encode('utf-8')) + 3) // 4 for input in inputs]
 
     def cosine_similiarity(self, a: list[float], b: list[float]) -> float:
-        return sum(ai * bi for ai, bi in zip(a, b)) / (math.sqrt(sum(ai * ai for ai in a)) * math.sqrt(sum(bi * bi for bi in b)))
+        denom = math.sqrt(sum(ai * ai for ai in a)) * math.sqrt(sum(bi * bi for bi in b))
+        return sum(ai * bi for ai, bi in zip(a, b)) / denom
 
     def form_context(self, question: str, files: list[File]) -> str:
         if not files:
@@ -311,31 +367,30 @@ You can only give one reply for each conversation turn.'''
     def do_edit(self, question: str, range_: tuple[int, int]):
         file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
         code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
-        question = question.strip()
+        original_question = question = question.strip()
         if not question:
             question = 'Fix, complete or continue writing.'
         question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
-        question = self.form_context(question=question, files=self.referenced_files(code))
-        self.submit_question(question, self.INSTRUCTION_EDIT, range_)
+        question = self.form_context(question=question, files=self.referenced_files(code, original_question))
+        self.submit_question(question, INSTRUCTION_EDIT, range_)
 
     def open_scratch(self, title):
-        existing_buffers = next((buf for buf in self.nvim.buffers if buf.name == title), None)
-        if existing_buffers:
-            self.nvim.command(f'buffer {existing_buffers.number}')
+        if self.nvim.eval(f'bufexists("{title}")'):
+            self.nvim.command(f'buffer bufnr("{title}") | redraw')
         else:
             self.nvim.command(f'new | noswapfile hide enew | setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted | file {title} | redraw')
 
     def do_chat(self, question: str, range_: tuple[int, int]):
         file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
         code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
-        question = question.strip()
+        original_question = question = question.strip()
         if question:
             if code.strip():
                 question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-            question = self.form_context(question=question, files=self.referenced_files(code))
+            question = self.form_context(question=question, files=self.referenced_files(code, original_question))
         self.open_scratch('[GPTChat]')
         if question:
-            self.submit_question(question, self.INSTRUCTION_CHAT, range_)
+            self.submit_question(question, INSTRUCTION_CHAT, range_)
 
     def do_gpt_range(self, args: str, range_: tuple[int, int], bang: bool):
         if self.running:
