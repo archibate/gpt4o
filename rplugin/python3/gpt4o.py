@@ -83,7 +83,7 @@ class GPT4oPlugin:
     def embedding_model(self) -> str:
         if self.cfg.embedding_model == 'auto':
             try:
-                import fastembed
+                import fastembed as _
                 return 'fastembed'
             except ImportError:
                 if 'openai' in self.client.base_url.host:
@@ -218,9 +218,6 @@ class GPT4oPlugin:
         start, end = range_
         self.nvim.current.buffer[start:end] = ['']
 
-    def wrap(self, code):
-        return f'```\n{code}\n```'
-
     def buf_into_file(self, buffer, content, buf_type=None):
         if buf_type is None:
             buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
@@ -241,27 +238,50 @@ class GPT4oPlugin:
             files = self.filter_similiar_chunks(code_sample, question, files)
         return files
 
+    def is_buffer_valid(self, buffer):
+        if buffer.valid and buffer.name:
+            buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
+            if not buf_type or buf_type in ['terminal', 'quickfix']:
+                return True
+        return False
+
+    def buffer_name_or_type(self, buffer) -> str:
+        buf_type: str = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
+        if not buf_type:
+            buffer_name: str = buffer.name
+            if buffer_name:
+                buffer_name = pathlib.Path(buffer_name).parts[-1]
+                buffer_name = buffer_name.rsplit('.', maxsplit=1)[0]
+            else:
+                buffer_name = '[No Name]'
+        else:
+            buffer_name = buf_type
+        return buffer_name
+
+    def is_buffer_related(self, buffer, current_name: str, current_content: str):
+        if not self.is_buffer_valid(buffer):
+            return False
+        buf_listed = self.nvim.api.get_option_value('buflisted', {'buf': buffer.number})
+        if buf_listed:
+            return True
+        buffer_name = self.buffer_name_or_type(buffer)
+        content = '\n'.join(buffer[:])
+        if re.search(rf'\b{re.escape(current_name)}\b', content) or re.search(rf'\b{re.escape(buffer_name)}\b', current_content):
+            return True
+
     def get_all_files(self) -> list[File]:
         current_buffer = self.nvim.current.buffer
-        current_name = pathlib.Path(current_buffer.name).parts[-1]
-        current_name = current_name.rsplit('.', maxsplit=1)[0]
+        current_name = self.buffer_name_or_type(current_buffer)
         current_content = '\n'.join(current_buffer[:])
         files: list[File] = []
         for buffer in self.nvim.buffers:
-            if buffer.valid and buffer.name and buffer.number != self.nvim.current.buffer.number:
+            if buffer.number == current_buffer.number:
+                continue
+            if self.is_buffer_related(buffer, current_name, current_content):
+                self.log(f'adding file: {buffer.name}')
+                content = '\n'.join(buffer[:])
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
-                buf_listed = self.nvim.api.get_option_value('buflisted', {'buf': buffer.number})
-                if not buf_type or buf_type in ['terminal', 'quickfix']:
-                    content = '\n'.join(buffer[:])
-                    if not buf_type:
-                        buffer_name = pathlib.Path(buffer.name).parts[-1]
-                        buffer_name = buffer_name.rsplit('.', maxsplit=1)[0]
-                    else:
-                        buffer_name = buf_type
-                    ok = buf_listed or re.search(rf'\b{re.escape(current_name)}\b', content) or re.search(rf'\b{re.escape(buffer_name)}\b', current_content)
-                    if ok:
-                        self.log(f'adding file: {buffer.name}')
-                        files.append(self.buf_into_file(buffer, content, buf_type))
+                files.append(self.buf_into_file(buffer, content, buf_type))
         self.log(f'current file: {current_buffer.name}')
         files.append(self.buf_into_file(current_buffer, current_content))
         files[-1].score = 2
@@ -375,14 +395,18 @@ class GPT4oPlugin:
         self.submit_question(question, INSTRUCTION_EDIT, range_)
 
     def open_scratch(self, title):
-        if self.nvim.eval(f'bufexists("{title}")'):
-            self.nvim.command(f'buffer bufnr("{title}") | redraw')
+        bufnr = self.nvim.eval(f'bufnr("^{title}$")')
+        if bufnr != -1:
+            self.nvim.command(f'buffer {bufnr} | redraw')
         else:
             self.nvim.command(f'new | noswapfile hide enew | setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted | file {title} | redraw')
 
     def do_chat(self, question: str, range_: tuple[int, int]):
         file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
-        code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
+        if range_[0] < range_[1]:
+            code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
+        else:
+            code = ''
         original_question = question = question.strip()
         if question:
             if code.strip():
@@ -412,7 +436,7 @@ class GPT4oPlugin:
             self.running = False
 
     @neovim.command('GPT', nargs='*', range=True, bang=True)
-    def on_GPTLine(self, args, range_, bang):
+    def on_GPT(self, args, range_, bang):
         self.do_gpt_range(args, range_, bang)
 
     @neovim.command('GPT4', nargs='*', range=True, bang=True)
@@ -426,6 +450,12 @@ class GPT4oPlugin:
         if end > num_lines:
             end = num_lines
         range_ = start, end
+        self.do_gpt_range(args, range_, bang)
+
+    @neovim.command('GPTChat', nargs='*', range=True, bang=True)
+    def on_GPTChat(self, args, range_, bang):
+        if range_[0] == range_[1]:
+            range_ = (range_[0] - 1, range_[1])
         self.do_gpt_range(args, range_, bang)
 
     @neovim.function('GPTSetup')
