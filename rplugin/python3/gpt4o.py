@@ -10,6 +10,7 @@ import time
 import re
 
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+
 INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
 
 Rules:
@@ -27,6 +28,43 @@ Rules:
 12. Assume that any necessary dependencies or libraries are already imported or available.
 
 IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
+
+INSTRUCTION_DIFF = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions. You modify code by outputing in the standard diff format, for example:
+
+--- a/path/to/file.txt
++++ b/path/to/file.txt
+@@ -1,6 +1,4 @@
+ 01
+-02
+-03
+ 04
+ 05
+ 06
+@@ -11,6 +9,4 @@
+ 11
+ 12
+ 13
+-14
+-15
+ 16
+
+Rules:
+1. Always output code in the standard diff format described above.
+2. Return only in standard diff format, with no additional text or explanations.
+3. The first character of your response must be the first character of the diff.
+4. The last character of your response must be the last character of the diff.
+5. NEVER use triple backticks (```) or any other markdown formatting in your response.
+6. Do not use any code block indicators, syntax highlighting markers, or any other formatting characters.
+7. Present the code exactly as it would appear in a plain text editor, preserving all whitespace, indentation, and line breaks.
+8. Maintain the original code structure and only make changes as specified by the user's instructions.
+9. Ensure that the modified code is syntactically and semantically correct for the given programming language.
+10. Use consistent indentation and follow language-specific style guidelines.
+11. If the user's request cannot be translated into code changes, respond only with the word NULL (without quotes or any formatting).
+12. Do not include any comments or explanations within the code unless specifically requested.
+13. Assume that any necessary dependencies or libraries are already imported or available.
+
+IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
+
 INSTRUCTION_CHAT = '''You are an AI programming assistant.
 Follow the user's requirements carefully & to the letter.
 Your responses should be informative and logical.
@@ -375,6 +413,12 @@ class GPT4oPlugin:
         denom = math.sqrt(sum(ai * ai for ai in a)) * math.sqrt(sum(bi * bi for bi in b))
         return sum(ai * bi for ai, bi in zip(a, b)) / denom
 
+    def add_indent(self, content: str, indent: str = '    ') -> str:
+        if content.strip():
+            return ('\n' + content).replace('\n', indent + '\n')
+        else:
+            return indent + '[Empty File]'
+
     def form_context(self, question: str, files: list[File]) -> str:
         if not files:
             return question
@@ -384,15 +428,34 @@ class GPT4oPlugin:
         result += f'Question: {question}'
         return result
 
-    def do_edit(self, question: str, range_: tuple[int, int]):
+    def get_range_code(self, range_: tuple[int, int]) -> tuple[str, str]:
         file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
-        code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
+        if range_[0] < range_[1]:
+            code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
+        else:
+            code = ''
+        return code, file_type
+
+    def do_edit(self, question: str, range_: tuple[int, int]):
+        code, file_type = self.get_range_code(range_)
         original_question = question = question.strip()
         if not question:
             question = 'Fix, complete or continue writing.'
         question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
         question = self.form_context(question=question, files=self.referenced_files(code, original_question))
         self.submit_question(question, INSTRUCTION_EDIT, range_)
+
+    def do_diff(self, question: str, range_: tuple[int, int]):
+        code, file_type = self.get_range_code(range_)
+        original_question = question = question.strip()
+        if not question:
+            question = 'Fix, complete or continue writing.'
+        question = f'Modify the code percisely follow the user instruction: {question}'
+        if code.strip():
+            file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
+            question = f'Given the following range of code:\n```{file_type}\n{code}\n{question}'
+        question = self.form_context(question=question, files=self.referenced_files(code, original_question))
+        self.submit_question(question, INSTRUCTION_DIFF, range_)
 
     def open_scratch(self, title):
         bufnr = self.nvim.eval(f'bufnr("^{title}$")')
@@ -402,11 +465,7 @@ class GPT4oPlugin:
             self.nvim.command(f'new | noswapfile hide enew | setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted | file {title} | redraw')
 
     def do_chat(self, question: str, range_: tuple[int, int]):
-        file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
-        if range_[0] < range_[1]:
-            code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
-        else:
-            code = ''
+        code, file_type = self.get_range_code(range_)
         original_question = question = question.strip()
         if question:
             if code.strip():
@@ -428,10 +487,10 @@ class GPT4oPlugin:
                 question = ''
             range_ = (range_[0] - 1, range_[1])
             assert range_[0] <= range_[1], range_
-            if bang:
-                self.do_chat(question=question, range_=range_)
-            else:
+            if not bang:
                 self.do_edit(question=question, range_=range_)
+            else:
+                self.do_chat(question=question, range_=range_)
         finally:
             self.running = False
 
@@ -450,12 +509,6 @@ class GPT4oPlugin:
         if end > num_lines:
             end = num_lines
         range_ = start, end
-        self.do_gpt_range(args, range_, bang)
-
-    @neovim.command('GPTChat', nargs='*', range=True, bang=True)
-    def on_GPTChat(self, args, range_, bang):
-        if range_[0] == range_[1]:
-            range_ = (range_[0] - 1, range_[1])
         self.do_gpt_range(args, range_, bang)
 
     @neovim.function('GPTSetup')
