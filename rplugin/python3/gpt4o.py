@@ -2,17 +2,17 @@ import pathlib
 import traceback
 import subprocess
 import threading
+import unittest
 from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import Callable, Optional, Iterable
 from annotated_types import T
 import tempfile
 import neovim
-import openai
-import heapq
 import math
 import time
 import re
+
 
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 
@@ -31,42 +31,6 @@ Rules:
 10. If the user's request cannot be translated into code changes, respond only with the word NULL (without quotes or any formatting).
 11. Do not include any comments or explanations within the code unless specifically requested.
 12. Assume that any necessary dependencies or libraries are already imported or available.
-
-IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
-
-INSTRUCTION_DIFF = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions. You modify code by outputing in the standard diff format, for example:
-
---- a/path/to/file.txt
-+++ b/path/to/file.txt
-@@ -1,6 +1,4 @@
- 01
--02
--03
- 04
- 05
- 06
-@@ -11,6 +9,4 @@
- 11
- 12
- 13
--14
--15
- 16
-
-Rules:
-1. Always output code in the standard diff format described above.
-2. Return only in standard diff format, with no additional text or explanations.
-3. The first character of your response must be the first character of the diff.
-4. The last character of your response must be the last character of the diff.
-5. NEVER use triple backticks (```) or any other markdown formatting in your response.
-6. Do not use any code block indicators, syntax highlighting markers, or any other formatting characters.
-7. Present the code exactly as it would appear in a plain text editor, preserving all whitespace, indentation, and line breaks.
-8. Maintain the original code structure and only make changes as specified by the user's instructions.
-9. Ensure that the modified code is syntactically and semantically correct for the given programming language.
-10. Use consistent indentation and follow language-specific style guidelines.
-11. If the user's request cannot be translated into code changes, respond only with the word NULL (without quotes or any formatting).
-12. Do not include any comments or explanations within the code unless specifically requested.
-13. Assume that any necessary dependencies or libraries are already imported or available.
 
 IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
 
@@ -94,35 +58,77 @@ class File:
     type: str = ''
     score: int = 1
 
+
 class BufferHistory:
     def __init__(self):
         self.history: list[tuple[int, str]] = []
 
     def add_history(self, seq: int, content: str):
-        heapq.heappush(self.history, (seq, content))
+        self.history.append((seq, content))
 
     def shrink_to(self, size: int):
-        if len(self.history) > size:
-            self.history = self.history[:size]
+        # self.history = sorted(self.history, key=lambda x: x[0], reverse=True)[:size]
+        self.history = self.history[-size:]
 
-    def history_newer_than(self, minimal_seq: int) -> list[tuple[int, str]]:
-        i = len(self.history) // 2
-        while True:
-            seq, _ = self.history[i]
-            if seq > minimal_seq:
-                if i == 0 or self.history[i-1][0] <= minimal_seq:
-                    break
-                else:
-                    i = i // 2
-            else:
-                if i == len(self.history) - 1 or self.history[i+1][0] > minimal_seq:
-                    break
-                else:
-                    i = (len(self.history) + i) // 2
-        return self.history[i:]
+    def history_newer_than(self, min_seq: int) -> list[tuple[int, str]]:
+        result = []
+        for seq, content in self.history:
+            if seq > min_seq:
+                result.append((seq, content))
+        return result
 
     def __iter__(self):
         return iter(self.history)
+
+
+class TestBufferHistory(unittest.TestCase):
+    def setUp(self):
+        self.history = BufferHistory()
+
+    def test_add_history(self):
+        self.history.add_history(1, "First entry")
+        self.history.add_history(2, "Second entry")
+        self.assertEqual(len(self.history.history), 2)
+
+    def test_shrink_to(self):
+        self.history.add_history(1, "First entry")
+        self.history.add_history(2, "Second entry")
+        self.history.add_history(3, "Third entry")
+        self.history.shrink_to(2)
+        self.assertEqual(len(self.history.history), 2)
+        self.assertEqual(self.history.history[0][1], "Second entry")
+        self.assertEqual(self.history.history[1][1], "Third entry")
+
+    def test_history_newer_than(self):
+        self.history.add_history(1, "First entry")
+        self.history.add_history(2, "Second entry")
+        self.history.add_history(3, "Third entry")
+        self.history.add_history(4, "Fourth entry")
+
+        newer_history = self.history.history_newer_than(1)
+        self.assertEqual(len(newer_history), 3, newer_history)
+        self.assertEqual(newer_history[0][1], "Second entry")
+        self.assertEqual(newer_history[1][1], "Third entry")
+        self.assertEqual(newer_history[2][1], "Fourth entry")
+
+        newer_history = self.history.history_newer_than(2)
+        self.assertEqual(len(newer_history), 2, newer_history)
+        self.assertEqual(newer_history[0][1], "Third entry")
+        self.assertEqual(newer_history[1][1], "Fourth entry")
+
+        newer_history = self.history.history_newer_than(3)
+        self.assertEqual(len(newer_history), 1, newer_history)
+        self.assertEqual(newer_history[0][1], "Fourth entry")
+
+        newer_history = self.history.history_newer_than(4)
+        self.assertEqual(len(newer_history), 0, newer_history)
+
+    def test_iter(self):
+        self.history.add_history(1, "First entry")
+        self.history.add_history(2, "Second entry")
+        entries = list(iter(self.history))
+        self.assertEqual(len(entries), 2)
+
 
 @dataclass
 class Config:
@@ -140,11 +146,12 @@ class Config:
 
     model: str = 'auto'
     embedding_model: str = 'auto'
-    limit_context_tokens: int = 2500
+    limit_context_tokens: int = 2000
     context_chunk_tokens: int = 400
-    recent_diff_tokens: int = 800
-    max_recent_diff_count: int = 20
+    recent_diff_tokens: int = 600
+    max_recent_diff_count: int = 15
     extra_range_lines: int = 4
+
 
 @neovim.plugin
 class GPT4oPlugin:
@@ -189,6 +196,7 @@ class GPT4oPlugin:
     @property
     def client(self):
         if not self._real_client:
+            import openai
             self._real_client = openai.OpenAI(
                 base_url=self.cfg.base_url,
                 api_key=self.cfg.api_key,
@@ -245,14 +253,18 @@ class GPT4oPlugin:
         self.log(f'[FINISHED] total {total_time * 1000:.0f} ms, latency {latency_time * 1000:.0f} ms @{model}')
 
     def streaming_response(self, question: str, instruction: str) -> Iterable[str]:
+        import openai
         try:
             model = self.cfg.model
             if model == 'auto':
-                if 'deepseek' in self.client.base_url.host:
+                if 'openai' in self.client.base_url.host:
+                    model = DEFAULT_OPENAI_MODEL
+                elif 'deepseek' in self.client.base_url.host:
                     model = 'deepseek-coder'
                 else:
                     model = DEFAULT_OPENAI_MODEL
             self.log(question)
+
             completion = lambda: self.client.chat.completions.create(
                 model=model,
                 temperature=self.cfg.temperature,
@@ -266,13 +278,18 @@ class GPT4oPlugin:
                 stream=True,
                 stream_options={"include_usage": True} if self.cfg.include_usage else None,
             )
+
+            answer = ''
             for chunk in self.check_time(completion, model):
                 if chunk.usage:
                     self.check_price(chunk.usage, model)
                 if chunk.choices:
                     content = chunk.choices[0].delta.content
                     if content:
+                        answer += content
                         yield content
+            self.log(answer)
+
         except openai.OpenAIError:
             error = traceback.format_exc()
             self.log(error)
@@ -324,19 +341,23 @@ class GPT4oPlugin:
         return files
 
     def get_recent_diffs(self) -> list[str]:
-        minimal_seq = self.seq - self.cfg.max_recent_diff_count
+        buffers = {}
+        for buffer in self.nvim.buffers:
+            buffers[buffer.number] = buffer
 
+        min_seq = self.seq - self.cfg.max_recent_diff_count
         history_list: list[tuple[int, int, str]] = []
         with self.change_lock:
-            buffers = {}
-            for buffer in self.nvim.buffers:
-                buffers[buffer.number] = buffer
             for bufnr, history in self.buffers_history.items():
                 if bufnr not in buffers:
                     continue
-                for seq, content in history.history_newer_than(minimal_seq):
+                for seq, content in history.history_newer_than(min_seq):
                     history_list.append((seq, bufnr, content))
                     break
+
+        self.alert(repr(history_list))
+        if not history_list:
+            return []
 
         history_list.sort(key=lambda e: e[0])
         changes: list[str] = []
@@ -687,3 +708,7 @@ class GPT4oPlugin:
 
         diff = output.decode('utf-8')
         return diff
+
+
+if __name__ == '__main__':
+    unittest.main()
