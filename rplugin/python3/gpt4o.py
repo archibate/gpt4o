@@ -70,12 +70,10 @@ class BufferHistory:
         # self.history = sorted(self.history, key=lambda x: x[0], reverse=True)[:size]
         self.history = self.history[-size:]
 
-    def history_newer_than(self, min_seq: int) -> list[tuple[int, str]]:
-        result = []
+    def history_newer_than(self, min_seq: int) -> Iterable[tuple[int, str]]:
         for seq, content in self.history:
             if seq > min_seq:
-                result.append((seq, content))
-        return result
+                yield seq, content
 
     def __iter__(self):
         return iter(self.history)
@@ -105,22 +103,22 @@ class TestBufferHistory(unittest.TestCase):
         self.history.add_history(3, "Third entry")
         self.history.add_history(4, "Fourth entry")
 
-        newer_history = self.history.history_newer_than(1)
+        newer_history = list(self.history.history_newer_than(1))
         self.assertEqual(len(newer_history), 3, newer_history)
         self.assertEqual(newer_history[0][1], "Second entry")
         self.assertEqual(newer_history[1][1], "Third entry")
         self.assertEqual(newer_history[2][1], "Fourth entry")
 
-        newer_history = self.history.history_newer_than(2)
+        newer_history = list(self.history.history_newer_than(2))
         self.assertEqual(len(newer_history), 2, newer_history)
         self.assertEqual(newer_history[0][1], "Third entry")
         self.assertEqual(newer_history[1][1], "Fourth entry")
 
-        newer_history = self.history.history_newer_than(3)
+        newer_history = list(self.history.history_newer_than(3))
         self.assertEqual(len(newer_history), 1, newer_history)
         self.assertEqual(newer_history[0][1], "Fourth entry")
 
-        newer_history = self.history.history_newer_than(4)
+        newer_history = list(self.history.history_newer_than(4))
         self.assertEqual(len(newer_history), 0, newer_history)
 
     def test_iter(self):
@@ -354,8 +352,6 @@ class GPT4oPlugin:
                 for seq, content in history.history_newer_than(min_seq):
                     history_list.append((seq, bufnr, content))
                     break
-
-        self.alert(repr(history_list))
         if not history_list:
             return []
 
