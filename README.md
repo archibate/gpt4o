@@ -2,11 +2,12 @@
 
 Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o ✨, offering intelligent code completion and editing to elevate developer productivity.
 
-<!-- ![](demo.mp4) -->
+<!-- ![Demo Video](demo.mp4) -->
 
 ## Features
 - Context-aware suggestions 🌍
 - Project files accounted 📄
+- Recent change awareness ±
 - Real-time code completion ⚡
 - Incremental streaming result ⏳
 - Edit existing code bases 🛠️
@@ -22,7 +23,7 @@ To install gpt4o.nvim, first make sure you have python3 support on your NeoVim.
 You may do this by running:
 
 ```bash
-python3 -m pip install neovim openai
+python3 -m pip install neovim openai tiktoken
 ```
 
 So far, you should see `OK` in the python3 support when running `:checkhealth`.
@@ -92,9 +93,9 @@ Actually, `:GPT4` is just a shortcut for `:-4,+4GPT`, which is Vim's range speci
 
 Typing `:%GPT` would allow gpt4o to edit the whole file. Since `%` means 'All lines' in Vim's range specifier syntax.
 
-### `:GPT @term`
-
-Invoke `:GPT @term` or `:GPT4 @term` (with special argument `@term`) will attach the recent terminal output (supports [toggleterm](https://github.com/akinsho/toggleterm.nvim)!), which is typically some annoying error messages, for gpt4o to account into context. This can be useful for example: you run the Python script into an error, then you may switch back to the Python file and type `:%GPT @term` to let gpt4o edit and automatically fix the error for you. 🎉
+<!-- ### `:GPT @term` -->
+<!--  -->
+<!-- Invoke `:GPT @term` or `:GPT4 @term` (with special argument `@term`) will attach the recent terminal output (supports [toggleterm](https://github.com/akinsho/toggleterm.nvim)!), which is typically some annoying error messages, for gpt4o to account into context. This can be useful for example: you run the Python script into an error, then you may switch back to the Python file and type `:%GPT @term` to let gpt4o edit and automatically fix the error for you. 🎉 -->
 
 ## Key maps
 It's suggested to map your preferred key bindings to quickly invoke gpt4o commands. For example, you might want to add the following lines to your `init.vim`:
@@ -111,7 +112,7 @@ or `init.lua`:
 
 ```lua
 vim.keymap.set({'v', 'n'}, 'gp', ':GPT<Space>')
-vim.keymap.set({'i', 'v', 'n'}, '<C-Space>', ':GPT<CR>')
+vim.keymap.set({'i', 'v', 'n'}, '<C-Space>', '<Cmd>GPT<CR>')
 ```
 
 Afterwards you may type `gp<CR>` in VISUAL or NORMAL mode to trigger GPT completion for selected range or current line. And `gp@term<CR>` if you'd like to attach terminal output. Optionally type `gpoptimize this code<CR>` for giving custom instructions.

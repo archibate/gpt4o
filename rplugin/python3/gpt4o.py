@@ -1,10 +1,15 @@
 import pathlib
 import traceback
+import subprocess
+import threading
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional
+from contextlib import contextmanager
+from typing import Callable, Optional, Iterable
 from annotated_types import T
+import tempfile
 import neovim
 import openai
+import heapq
 import math
 import time
 import re
@@ -89,33 +94,75 @@ class File:
     type: str = ''
     score: int = 1
 
+class BufferHistory:
+    def __init__(self):
+        self.history: list[tuple[int, str]] = []
+
+    def add_history(self, seq: int, content: str):
+        heapq.heappush(self.history, (seq, content))
+
+    def shrink_to(self, size: int):
+        if len(self.history) > size:
+            self.history = self.history[:size]
+
+    def history_newer_than(self, minimal_seq: int) -> list[tuple[int, str]]:
+        i = len(self.history) // 2
+        while True:
+            seq, _ = self.history[i]
+            if seq > minimal_seq:
+                if i == 0 or self.history[i-1][0] <= minimal_seq:
+                    break
+                else:
+                    i = i // 2
+            else:
+                if i == len(self.history) - 1 or self.history[i+1][0] > minimal_seq:
+                    break
+                else:
+                    i = (len(self.history) + i) // 2
+        return self.history[i:]
+
+    def __iter__(self):
+        return iter(self.history)
+
 @dataclass
 class Config:
-    extra_range_lines: int = 4
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     organization: Optional[str] = None
     project: Optional[str] = None
-    model: str = 'auto'
-    embedding_model: str = 'auto'
-    limit_context_tokens: int = 1000
-    context_chunk_tokens: int = 400
     max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
+    temperature: Optional[float] = 0.0
     frequency_penalty: Optional[float] = None
     presence_penalty: Optional[float] = None
     include_usage: bool = True
     include_time: bool = True
     timeout: Optional[float] = None
 
+    model: str = 'auto'
+    embedding_model: str = 'auto'
+    limit_context_tokens: int = 2500
+    context_chunk_tokens: int = 400
+    recent_diff_tokens: int = 800
+    max_recent_diff_count: int = 20
+    extra_range_lines: int = 4
+
 @neovim.plugin
 class GPT4oPlugin:
     def __init__(self, nvim: neovim.Nvim):
         self.nvim = nvim
-        self.running = False
+        self.running: bool = False
         self.cfg = Config()
         self._real_client = None
         self._real_fastembed_model = None
+        self.change_lock = threading.Lock()
+        self.buffers_history: dict[int, BufferHistory] = {}
+        self.seq_lock = threading.Lock()
+        self.seq: int = 0
+
+    def next_seq(self) -> int:
+        with self.seq_lock:
+            self.seq += 1
+            return self.seq
 
     @property
     def embedding_model(self) -> str:
@@ -270,11 +317,46 @@ class GPT4oPlugin:
             path = buffer.name
         return File(path=path, content=content, type=file_type)
 
-    def referenced_files(self, code_sample: str, question: str) -> list[File]:
+    def get_referenced_files(self, code_sample: str, question: str) -> list[File]:
         files = self.get_all_files()
         if self.embedding_model:
             files = self.filter_similiar_chunks(code_sample, question, files)
         return files
+
+    def get_recent_diffs(self) -> list[str]:
+        minimal_seq = self.seq - self.cfg.max_recent_diff_count
+
+        history_list: list[tuple[int, int, str]] = []
+        with self.change_lock:
+            buffers = {}
+            for buffer in self.nvim.buffers:
+                buffers[buffer.number] = buffer
+            for bufnr, history in self.buffers_history.items():
+                if bufnr not in buffers:
+                    continue
+                for seq, content in history.history_newer_than(minimal_seq):
+                    history_list.append((seq, bufnr, content))
+                    break
+
+        history_list.sort(key=lambda e: e[0])
+        changes: list[str] = []
+        for _, bufnr, content in history_list:
+            buffer = buffers[bufnr]
+            new_content = '\n'.join(buffer[:])
+            buffer_path = self.buffer_name_or_type(buffer)
+            diff = self.compute_diff(new_content, content, buffer_path)
+            if diff:
+                changes.append(diff)
+
+        tokens = self.count_tokens(changes)
+        accum_diffs = []
+        accum_tokens = 0
+        for ntoken, diff in zip(tokens, changes):
+            accum_diffs.append(diff)
+            accum_tokens += ntoken
+            if accum_tokens >= self.cfg.recent_diff_tokens:
+                break
+        return accum_diffs
 
     def is_buffer_valid(self, buffer):
         if buffer.valid and buffer.name:
@@ -287,14 +369,15 @@ class GPT4oPlugin:
         buf_type: str = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
         if not buf_type:
             buffer_name: str = buffer.name
-            if buffer_name:
-                buffer_name = pathlib.Path(buffer_name).parts[-1]
-                buffer_name = buffer_name.rsplit('.', maxsplit=1)[0]
-            else:
-                buffer_name = '[No Name]'
         else:
             buffer_name = buf_type
         return buffer_name
+
+    def simplify_buffer_name(self, name: str) -> str:
+        if name:
+            name = pathlib.Path(name).parts[-1]
+            name = name.rsplit('.', maxsplit=1)[0]
+        return name
 
     def is_buffer_related(self, buffer, current_name: str, current_content: str):
         if not self.is_buffer_valid(buffer):
@@ -302,14 +385,14 @@ class GPT4oPlugin:
         buf_listed = self.nvim.api.get_option_value('buflisted', {'buf': buffer.number})
         if buf_listed:
             return True
-        buffer_name = self.buffer_name_or_type(buffer)
+        buffer_name = self.simplify_buffer_name(self.buffer_name_or_type(buffer))
         content = '\n'.join(buffer[:])
-        if re.search(rf'\b{re.escape(current_name)}\b', content) or re.search(rf'\b{re.escape(buffer_name)}\b', current_content):
+        if re.search(rf'\b{re.escape(current_name)}\b', content) or (buffer_name and re.search(rf'\b{re.escape(buffer_name)}\b', current_content)):
             return True
 
     def get_all_files(self) -> list[File]:
         current_buffer = self.nvim.current.buffer
-        current_name = self.buffer_name_or_type(current_buffer)
+        current_name = self.simplify_buffer_name(self.buffer_name_or_type(current_buffer)) or '[No Name]'
         current_content = '\n'.join(current_buffer[:])
         files: list[File] = []
         for buffer in self.nvim.buffers:
@@ -328,6 +411,7 @@ class GPT4oPlugin:
     def filter_similiar_chunks(self, code_sample: str, question: str, files: list[File]):
         inputs: list[str] = []
         sources: list[int] = []
+        # code_sample_lines = code_sample.split('\n')
         for fileid, file in enumerate(files):
             for line in self.split_content_chunks(file.content):
                 line = line.rstrip().lstrip('\n')
@@ -419,13 +503,16 @@ class GPT4oPlugin:
         else:
             return indent + '[Empty File]'
 
-    def form_context(self, question: str, files: list[File]) -> str:
+    def form_context(self, question: str, files: list[File], diffs: list[str]) -> str:
         if not files:
             return question
         result = 'Use the following context to answer question at the end:\n\n'
         for file in files:
             result += f'File path: {file.path}\nFile content:\n```{file.type}\n{file.content}\n```\n\n'
-        result += f'Question: {question}'
+        if diffs:
+            result += f'Recent changes:\n```diff\n{'\n'.join(diffs)}\n```\n\n'
+        if question:
+            result += f'Question: {question}'
         return result
 
     def get_range_code(self, range_: tuple[int, int]) -> tuple[str, str]:
@@ -436,26 +523,18 @@ class GPT4oPlugin:
             code = ''
         return code, file_type
 
+    def alert(self, message: str, level: str = 'INFO'):
+        self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level})')
+
     def do_edit(self, question: str, range_: tuple[int, int]):
         code, file_type = self.get_range_code(range_)
         original_question = question = question.strip()
         if not question:
             question = 'Fix, complete or continue writing.'
+            # question = 'Continue completing the code based on recent changes.'
         question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
-        question = self.form_context(question=question, files=self.referenced_files(code, original_question))
+        question = self.form_context(question=question, files=self.get_referenced_files(code, original_question), diffs=self.get_recent_diffs())
         self.submit_question(question, INSTRUCTION_EDIT, range_)
-
-    def do_diff(self, question: str, range_: tuple[int, int]):
-        code, file_type = self.get_range_code(range_)
-        original_question = question = question.strip()
-        if not question:
-            question = 'Fix, complete or continue writing.'
-        question = f'Modify the code percisely follow the user instruction: {question}'
-        if code.strip():
-            file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
-            question = f'Given the following range of code:\n```{file_type}\n{code}\n{question}'
-        question = self.form_context(question=question, files=self.referenced_files(code, original_question))
-        self.submit_question(question, INSTRUCTION_DIFF, range_)
 
     def open_scratch(self, title):
         bufnr = self.nvim.eval(f'bufnr("^{title}$")')
@@ -470,17 +549,33 @@ class GPT4oPlugin:
         if question:
             if code.strip():
                 question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-            question = self.form_context(question=question, files=self.referenced_files(code, original_question))
+            question = self.form_context(question=question, files=self.get_referenced_files(code, original_question), diffs=self.get_recent_diffs())
         self.open_scratch('[GPTChat]')
         if question:
             self.submit_question(question, INSTRUCTION_CHAT, range_)
 
-    def do_gpt_range(self, args: str, range_: tuple[int, int], bang: bool):
+    @neovim.command('GPTInfo', nargs='*', range=True)
+    def on_GPTInfo(self, args: list[str], range_: tuple[int, int]):
+        question = ' '.join(args)
+        code, file_type = self.get_range_code(range_)
+        if question:
+            if code.strip():
+                question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
+        question = self.form_context(question=question, files=self.get_referenced_files(code, question), diffs=self.get_recent_diffs())
+        self.alert(question)
+
+    def running_guard(self):
         if self.running:
             self.running = False
             return
         self.running = True
         try:
+            yield
+        finally:
+            self.running = False
+
+    def do_gpt_range(self, args: list[str], range_: tuple[int, int], bang: bool):
+        for _ in self.running_guard():
             if args:
                 question = ' '.join(args)
             else:
@@ -491,15 +586,13 @@ class GPT4oPlugin:
                 self.do_edit(question=question, range_=range_)
             else:
                 self.do_chat(question=question, range_=range_)
-        finally:
-            self.running = False
 
     @neovim.command('GPT', nargs='*', range=True, bang=True)
-    def on_GPT(self, args, range_, bang):
+    def on_GPT(self, args: list[str], range_: tuple[int, int], bang: bool):
         self.do_gpt_range(args, range_, bang)
 
     @neovim.command('GPT4', nargs='*', range=True, bang=True)
-    def on_GPT4(self, args, range_, bang):
+    def on_GPT4(self, args: list[str], range_: tuple[int, int], bang: bool):
         start, end = range_
         start -= self.cfg.extra_range_lines
         end += self.cfg.extra_range_lines
@@ -511,8 +604,86 @@ class GPT4oPlugin:
         range_ = start, end
         self.do_gpt_range(args, range_, bang)
 
-    @neovim.function('GPTSetup')
-    def on_GPTSetup(self, args):
-        assert isinstance(args, dict)
-        for k, v in args:
-            setattr(self.cfg, k, v)
+    @neovim.command('GPTSetup', nargs='*', sync=True, allow_nested=False)
+    def on_GPTSetup(self, args: list[str]):
+        for _ in self.running_guard():
+            for kv in args:
+                kv = kv.split('=', maxsplit=1)
+                k = kv[0]
+                if k.startswith('_') or not hasattr(self.cfg, k):
+                    self.alert(f'no such config key {k}', 'ERROR')
+                if len(kv) > 1:
+                    v = kv[1]
+                    type_ = self.cfg.__annotations__[k]
+                    can_be_none = False
+                    if hasattr(type_, '__args__') and hasattr(type_.__args__, '__getitem__'):
+                        type_ = type_.__args__[0]
+                        can_be_none = True
+                    if v == '':
+                        if can_be_none:
+                            v = None
+                    if v is not None:
+                        v = type_(v)
+                    setattr(self.cfg, k, v)
+
+    @contextmanager
+    def eventignore_guard(self):
+        ei_backup = self.nvim.api.eval('&eventignore')
+        try:
+            assert isinstance(ei_backup, str), ei_backup
+            yield
+            self.nvim.command('set eventignore=all')
+        finally:
+            self.nvim.command(f'set eventignore={ei_backup}')
+
+    @neovim.command('GPTHold', bang=True)
+    def on_GPTHold(self, bang: bool):
+        _ = bang
+
+        with self.eventignore_guard():
+            if not self.nvim.api.eval('&modifiable'):
+                return
+    
+            new_content = self.nvim.current.buffer[:]
+            new_content = '\n'.join(new_content)
+    
+            current_number = self.nvim.current.buffer.number
+            with self.change_lock:
+                if current_number not in self.buffers_history:
+                    history = BufferHistory()
+                    self.buffers_history[current_number] = history
+                else:
+                    history = self.buffers_history[current_number]
+                history.add_history(self.next_seq(), new_content)
+                history.shrink_to(self.cfg.max_recent_diff_count)
+
+    def compute_diff(self, new_content: str, old_content: str, current_path: str = '') -> Optional[str]:
+        old_label = 'a'
+        new_label = 'b'
+        if current_path:
+            current_path = '/' + current_path.lstrip('/')
+            old_label += current_path
+            new_label += current_path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = pathlib.Path(temp_dir)
+            old_file = temp_dir / 'a'
+            new_file = temp_dir / 'b'
+            with open(old_file, 'w') as f:
+                f.write(old_content)
+            with open(new_file, 'w') as f:
+                f.write(new_content)
+            with subprocess.Popen(['diff', '-u', '-d', '--label', old_label, '--label', new_label, str(old_file), str(new_file)],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+                output, error = proc.communicate()
+                if error:
+                    self.alert(error.decode('utf-8'), 'ERROR')
+                ret = proc.wait()
+                if ret == 0:
+                    return None
+                if ret != 1:
+                    self.alert(f'diff exited with {ret}', 'ERROR')
+                    return None
+
+        diff = output.decode('utf-8')
+        return diff
