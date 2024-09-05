@@ -1,3 +1,21 @@
+class Timer:
+    def __init__(self):
+        import time
+        self.t0 = time.time()
+
+    def record(self, tag: str):
+        import time
+        t1 = time.time()
+        dt = t1 - self.t0
+        self.add(tag, dt)
+        return dt
+
+    def add(self, tag: str, dt: float):
+        with open('/tmp/gpt4o-timer.log', 'a') as f:
+            f.write(f'{tag}: {dt:.3f}\n')
+
+timer = Timer()
+
 import pathlib
 import traceback
 import subprocess
@@ -5,16 +23,27 @@ import threading
 import unittest
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import Callable, Optional, Iterable
-from annotated_types import T
+from typing import Callable, Generic, Optional, Iterable, TypeVar
 import tempfile
 import neovim
 import math
 import time
 import re
 
+T = TypeVar('T')
+K = TypeVar('K')
+V = TypeVar('V')
+
+timer.record('import finish')
+
 
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+
+SPECIAL_FILE_TYPES = {
+    'terminal': ('[terminal]', 'bash'),
+    'toggleterm': ('[terminal]', 'bash'),
+    'quickfix': ('[quickfix]', ''),
+}
 
 INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
 
@@ -51,12 +80,107 @@ The user works in an IDE of NeoVim which has a concept for editors with open fil
 You can only give one reply for each conversation turn.'''
 
 
-@dataclass
-class File:
-    path: str
-    content: str
-    type: str = ''
-    score: int = 1
+class TestTimer(unittest.TestCase):
+    def setUp(self):
+        self.timer = Timer()
+
+    def test_record(self):
+        self.timer.record('test')
+        self.assertGreater(self.timer.t0, 0)
+
+    def test_add(self):
+        with open('/tmp/gpt4o-timer.log', 'w') as f:
+            pass
+        self.timer.add('test', 1)
+        with open('/tmp/gpt4o-timer.log', 'r') as f:
+            self.assertEqual(f.read(), 'test: 1.000\n')
+
+    def test_timer(self):
+        self.timer.record('test')
+        self.timer.record('test2')
+        self.assertGreater(self.timer.t0, 0)
+
+
+class LruCache(Generic[K, V]):
+    def __init__(self):
+        self.cache: dict[K, V] = {}
+        self.lru: list[K] = []  # TODO
+
+    @contextmanager
+    def usage_guard(self):
+        yield
+
+    def find_entry(self, key: K) -> Optional[V]:
+        return self.cache.get(key)
+
+    def add_entry(self, key: K, val: V):
+        self.cache[key] = val
+
+    def delete_entry(self, key: K):
+        self.cache.pop(key, None)
+
+    def cached_calc(self, calc: Callable[[K], V], input: K):
+        with self.usage_guard():
+            output = self.find_entry(input)
+            if output is None:
+                output = calc(input)
+                self.add_entry(input, output)
+        return output
+
+    def batched_cached_calc(self, calc: Callable[[list[K]], list[V]], inputs: list[K]) -> list[V]:
+        missed_inputs: list[K] = []
+        missed_indices: list[int] = []
+        outputs: list[Optional[V]] = []
+
+        with self.usage_guard():
+            for i, input in enumerate(inputs):
+                output = self.find_entry(input)
+                if output is None:
+                    missed_inputs.append(input)
+                    missed_indices.append(i)
+                    outputs.append(None)
+                else:
+                    outputs.append(output)
+
+            if missed_inputs:
+                missed_outputs = calc(missed_inputs)
+                assert isinstance(missed_outputs, list)
+                for i, output in zip(missed_indices, missed_outputs):
+                    outputs[i] = output
+                    self.add_entry(inputs[i], output)
+
+        assert all(x is not None for x in outputs)
+        return outputs  # type: ignore
+
+
+class TestLruCache(unittest.TestCase):
+    def setUp(self):
+        self.cache = LruCache()
+
+    def test_add_entry(self):
+        self.cache.add_entry(1, 'a')
+        self.assertEqual(self.cache.find_entry(1), 'a')
+
+    def test_delete_entry(self):
+        self.cache.add_entry(1, 'a')
+        self.cache.delete_entry(1)
+        self.assertEqual(self.cache.find_entry(1), None)
+
+    def test_cached_calc(self):
+        def calc(x: int) -> int:
+            return x + 1
+
+        self.assertEqual(self.cache.cached_calc(calc, 1), 2)
+        self.assertEqual(self.cache.cached_calc(calc, 2), 3)
+        self.assertEqual(self.cache.cached_calc(calc, 3), 4)
+        self.assertEqual(self.cache.cached_calc(calc, 1), 2)
+
+    def test_batched_cached_calc(self):
+        def calc(x: list[int]) -> list[int]:
+            return [i + 1 for i in x]
+
+        self.assertEqual(self.cache.batched_cached_calc(calc, [1, 2, 3]), [2, 3, 4])
+        self.assertEqual(self.cache.batched_cached_calc(calc, [0, 2, 3, 6]), [1, 3, 4, 7])
 
 
 class BufferHistory:
@@ -129,6 +253,14 @@ class TestBufferHistory(unittest.TestCase):
 
 
 @dataclass
+class ReferencedFile:
+    path: str
+    content: str
+    type: str = ''
+    score: int = 1
+
+
+@dataclass
 class Config:
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -144,7 +276,7 @@ class Config:
 
     model: str = 'auto'
     embedding_model: str = 'auto'
-    limit_context_tokens: int = 2000
+    limit_context_tokens: int = 10000
     context_chunk_tokens: int = 400
     recent_diff_tokens: int = 600
     max_recent_diff_count: int = 15
@@ -162,6 +294,8 @@ class GPT4oPlugin:
         self.change_lock = threading.Lock()
         self.buffers_history: dict[int, BufferHistory] = {}
         self.seq_lock = threading.Lock()
+        self.embedding_cache: LruCache[str, list[float]] = LruCache()
+        self.count_tokens_cache: LruCache[str, int] = LruCache()
         self.seq: int = 0
 
     def next_seq(self) -> int:
@@ -169,32 +303,37 @@ class GPT4oPlugin:
             self.seq += 1
             return self.seq
 
-    @property
-    def embedding_model(self) -> str:
+    def get_embedding_model(self) -> str:
         if self.cfg.embedding_model == 'auto':
             try:
+                timer.record('import fastembed begin')
                 import fastembed as _
+                timer.record('import fastembed end')
                 return 'fastembed'
             except ImportError:
-                if 'openai' in self.client.base_url.host:
+                if 'openai' in self.get_openai_client().base_url.host:
                     return 'text-embedding-3-small'
                 else:
                     return ''
         return self.cfg.embedding_model
 
     def calculate_embeddings(self, inputs: list[str]) -> list[list[float]]:
-        if self.embedding_model == 'fastembed':
-            return [list(data) for data in self.fastembed_model.embed(inputs)]
+        return self.embedding_cache.batched_cached_calc(self.impl_calculate_embeddings, inputs)
+
+    def impl_calculate_embeddings(self, inputs: list[str]) -> list[list[float]]:
+        if self.get_embedding_model() == 'fastembed':
+            return [list(data) for data in self.get_fastembed_model().embed(inputs)]
         else:
-            assert self.embedding_model
-            response = self.client.embeddings.create(input=inputs, model=self.embedding_model)
-            self.check_price(response.usage, self.embedding_model)
+            assert self.get_embedding_model()
+            response = self.get_openai_client().embeddings.create(input=inputs, model=self.get_embedding_model())
+            self.check_price(response.usage, self.get_embedding_model())
             return [embedding.embedding for embedding in response.data]
 
-    @property
-    def client(self):
+    def get_openai_client(self):
         if not self._real_client:
+            timer.record('import openai begin')
             import openai
+            timer.record('import openai end')
             self._real_client = openai.OpenAI(
                 base_url=self.cfg.base_url,
                 api_key=self.cfg.api_key,
@@ -204,11 +343,12 @@ class GPT4oPlugin:
             )
         return self._real_client
 
-    @property
-    def fastembed_model(self):
+    def get_fastembed_model(self):
         if not self._real_fastembed_model:
             import fastembed
+            timer.record('construct fastembed begin')
             self._real_fastembed_model = fastembed.TextEmbedding()
+            timer.record('construct fastembed end' + '\n'.join(traceback.format_stack()))
         return self._real_fastembed_model
 
     def log(self, line: str):
@@ -251,19 +391,19 @@ class GPT4oPlugin:
         self.log(f'[FINISHED] total {total_time * 1000:.0f} ms, latency {latency_time * 1000:.0f} ms @{model}')
 
     def streaming_response(self, question: str, instruction: str) -> Iterable[str]:
-        import openai
+        client = self.get_openai_client()
         try:
             model = self.cfg.model
             if model == 'auto':
-                if 'openai' in self.client.base_url.host:
+                if 'openai' in client.base_url.host:
                     model = DEFAULT_OPENAI_MODEL
-                elif 'deepseek' in self.client.base_url.host:
+                elif 'deepseek' in client.base_url.host:
                     model = 'deepseek-coder'
                 else:
                     model = DEFAULT_OPENAI_MODEL
             self.log(question)
 
-            completion = lambda: self.client.chat.completions.create(
+            completion = lambda: client.chat.completions.create(
                 model=model,
                 temperature=self.cfg.temperature,
                 frequency_penalty=self.cfg.frequency_penalty,
@@ -288,12 +428,12 @@ class GPT4oPlugin:
                         yield content
             self.log(answer)
 
-        except openai.OpenAIError:
+        except __import__(client.__module__).OpenAIError:
             error = traceback.format_exc()
             self.log(error)
             yield error
 
-    def submit_question(self, question: str, instruction: str, range_: tuple[int, int]):
+    def submit_question(self, question: str, instruction: str, range_: tuple[int, int], null_token: Optional[str] = None) -> bool:
         self.nvim.command('set paste')
         try:
             first = True
@@ -301,6 +441,8 @@ class GPT4oPlugin:
                 if not self.running:
                     break
                 if first:
+                    if null_token and chunk == null_token:
+                        return False
                     self.nvim.command(f'normal! {range_[0] + 1}G')
                     self.nvim.current.buffer[range_[0]:range_[1]] = ['']
                     first = False
@@ -308,6 +450,7 @@ class GPT4oPlugin:
                 self.nvim.command('redraw')
         finally:
             self.nvim.command('set nopaste')
+        return True
 
     def buffer_slice(self, range_: tuple[int, int]) -> str:
         start, end = range_
@@ -318,23 +461,28 @@ class GPT4oPlugin:
         start, end = range_
         self.nvim.current.buffer[start:end] = ['']
 
-    def buf_into_file(self, buffer, content, buf_type=None):
+    def terminal_treat_power10k(self, content: str) -> str:
+        content = re.sub(r'^❯ $', '$ ', content)
+        content = re.sub(r'^╭─ .* ─╮$', '', content)
+        content = re.sub(r'^╰─ ', '$ ', content)
+        content = re.sub(r'\s+─╯$', '', content)
+        return content
+
+    def buf_into_file(self, buffer, content: str, buf_type: Optional[str] = None) -> ReferencedFile:
         if buf_type is None:
             buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
-        if buf_type == 'terminal':
-            file_type = 'bash'
-            path = '[terminal]'
-        if buf_type == 'quickfix':
-            file_type = 'qf'
-            path = '[quickfix]'
+        if buf_type in SPECIAL_FILE_TYPES:
+            path, file_type = SPECIAL_FILE_TYPES[buf_type]
+            if path == '[terminal]':
+                content = self.terminal_treat_power10k(content)
         else:
-            file_type = self.nvim.api.get_option_value('filetype', {'buf': buffer.number})
             path = buffer.name
-        return File(path=path, content=content, type=file_type)
+            file_type = self.nvim.api.get_option_value('filetype', {'buf': buffer.number})
+        return ReferencedFile(path=path, content=content, type=file_type)
 
-    def get_referenced_files(self, code_sample: str, question: str) -> list[File]:
+    def get_referenced_files(self, code_sample: str, question: str) -> list[ReferencedFile]:
         files = self.get_all_files()
-        if self.embedding_model:
+        if self.get_embedding_model():
             files = self.filter_similiar_chunks(code_sample, question, files)
         return files
 
@@ -378,7 +526,7 @@ class GPT4oPlugin:
     def is_buffer_valid(self, buffer):
         if buffer.valid and buffer.name:
             buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
-            if not buf_type or buf_type in ['terminal', 'quickfix']:
+            if not buf_type or buf_type in SPECIAL_FILE_TYPES:
                 return True
         return False
 
@@ -407,25 +555,25 @@ class GPT4oPlugin:
         if re.search(rf'\b{re.escape(current_name)}\b', content) or (buffer_name and re.search(rf'\b{re.escape(buffer_name)}\b', current_content)):
             return True
 
-    def get_all_files(self) -> list[File]:
+    def get_all_files(self) -> list[ReferencedFile]:
         current_buffer = self.nvim.current.buffer
         current_name = self.simplify_buffer_name(self.buffer_name_or_type(current_buffer)) or '[No Name]'
         current_content = '\n'.join(current_buffer[:])
-        files: list[File] = []
+        files: list[ReferencedFile] = []
         for buffer in self.nvim.buffers:
             if buffer.number == current_buffer.number:
                 continue
             if self.is_buffer_related(buffer, current_name, current_content):
-                self.log(f'adding file: {buffer.name}')
-                content = '\n'.join(buffer[:])
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
+                self.log(f'adding file: {buffer.name}{' ' + buf_type if buf_type else ''}')
+                content = '\n'.join(buffer[:])
                 files.append(self.buf_into_file(buffer, content, buf_type))
         self.log(f'current file: {current_buffer.name}')
         files.append(self.buf_into_file(current_buffer, current_content))
         files[-1].score = 2
         return files
 
-    def filter_similiar_chunks(self, code_sample: str, question: str, files: list[File]):
+    def filter_similiar_chunks(self, code_sample: str, question: str, files: list[ReferencedFile]):
         inputs: list[str] = []
         sources: list[int] = []
         # code_sample_lines = code_sample.split('\n')
@@ -450,7 +598,7 @@ class GPT4oPlugin:
             if self.cfg.include_time:
                 assert t0
                 dt = time.monotonic() - t0
-                self.log(f'embedding {dt * 1000:.0f} ms @{self.embedding_model}')
+                self.log(f'embedding {dt * 1000:.0f} ms @{self.get_embedding_model()}')
             sample = response[-1]
             contents: list[list[str]] = [[] for _ in range(len(files))]
             similiarities = [0.0 for _ in range(len(sources))]
@@ -471,7 +619,7 @@ class GPT4oPlugin:
                 if ok:
                     fileid = sources[i]
                     contents[fileid].append(inputs[i])
-            new_files: list[File] = []
+            new_files: list[ReferencedFile] = []
             for i, content in enumerate(contents):
                 file = files[i]
                 if content:
@@ -503,12 +651,19 @@ class GPT4oPlugin:
 
     def count_tokens(self, inputs: list[str]) -> list[int]:
         try:
-            import tiktoken
-            encoding = tiktoken.encoding_for_model(DEFAULT_OPENAI_MODEL)
-            tokens = encoding.encode_batch(inputs, disallowed_special=())
-            return [len(t) for t in tokens]
+            timer.record('import tiktoken begin')
+            import tiktoken as _
+            timer.record('import tiktoken end')
         except ImportError:
             return [(len(input.encode('utf-8')) + 3) // 4 for input in inputs]
+        else:
+            return self.count_tokens_cache.batched_cached_calc(self.impl_count_tokens, inputs)
+
+    def impl_count_tokens(self, inputs: list[str]) -> list[int]:
+        import tiktoken
+        encoding = tiktoken.encoding_for_model(DEFAULT_OPENAI_MODEL)
+        tokens = encoding.encode_batch(inputs, disallowed_special=())
+        return [len(t) for t in tokens]
 
     def cosine_similiarity(self, a: list[float], b: list[float]) -> float:
         denom = math.sqrt(sum(ai * ai for ai in a)) * math.sqrt(sum(bi * bi for bi in b))
@@ -520,7 +675,7 @@ class GPT4oPlugin:
         else:
             return indent + '[Empty File]'
 
-    def form_context(self, question: str, files: list[File], diffs: list[str]) -> str:
+    def form_context(self, question: str, files: list[ReferencedFile], diffs: list[str]) -> str:
         if not files:
             return question
         result = 'Use the following context to answer question at the end:\n\n'
@@ -543,15 +698,30 @@ class GPT4oPlugin:
     def alert(self, message: str, level: str = 'INFO'):
         self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level})')
 
-    def do_edit(self, question: str, range_: tuple[int, int]):
+    def do_prompt(self, question: str, range_: tuple[int, int], force_chat: bool):
         code, file_type = self.get_range_code(range_)
         original_question = question = question.strip()
-        if not question:
-            question = 'Fix, complete or continue writing.'
-            # question = 'Continue completing the code based on recent changes.'
-        question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
-        question = self.form_context(question=question, files=self.get_referenced_files(code, original_question), diffs=self.get_recent_diffs())
-        self.submit_question(question, INSTRUCTION_EDIT, range_)
+
+        while True:
+            if not force_chat:
+                if not question:
+                    question = 'Fix, complete or continue writing.'
+                question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
+            else:
+                if question:
+                    if code.strip():
+                        question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
+                    question = self.form_context(question=question, files=self.get_referenced_files(code, original_question), diffs=self.get_recent_diffs())
+
+            if force_chat:
+                self.open_scratch('[GPTChat]')
+            if question:
+                instruction = INSTRUCTION_EDIT if not force_chat else INSTRUCTION_CHAT
+                success = self.submit_question(question, instruction=instruction, range_=range_)
+                if not success:
+                    force_chat = True
+                    continue
+            break
 
     def open_scratch(self, title):
         bufnr = self.nvim.eval(f'bufnr("^{title}$")')
@@ -560,19 +730,13 @@ class GPT4oPlugin:
         else:
             self.nvim.command(f'new | noswapfile hide enew | setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted | file {title} | redraw')
 
-    def do_chat(self, question: str, range_: tuple[int, int]):
-        code, file_type = self.get_range_code(range_)
-        original_question = question = question.strip()
-        if question:
-            if code.strip():
-                question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-            question = self.form_context(question=question, files=self.get_referenced_files(code, original_question), diffs=self.get_recent_diffs())
-        self.open_scratch('[GPTChat]')
-        if question:
-            self.submit_question(question, INSTRUCTION_CHAT, range_)
-
     @neovim.command('GPTInfo', nargs='*', range=True)
     def on_GPTInfo(self, args: list[str], range_: tuple[int, int]):
+        # tmp = []
+        # for buffer in self.nvim.buffers:
+        #     tmp.append([buffer.number, self.is_buffer_valid(buffer)])
+        # self.alert(repr(tmp))
+
         question = ' '.join(args)
         code, file_type = self.get_range_code(range_)
         if question:
@@ -599,10 +763,7 @@ class GPT4oPlugin:
                 question = ''
             range_ = (range_[0] - 1, range_[1])
             assert range_[0] <= range_[1], range_
-            if not bang:
-                self.do_edit(question=question, range_=range_)
-            else:
-                self.do_chat(question=question, range_=range_)
+            self.do_prompt(question=question, range_=range_, force_chat=bang)
 
     @neovim.command('GPT', nargs='*', range=True, bang=True)
     def on_GPT(self, args: list[str], range_: tuple[int, int], bang: bool):
@@ -655,6 +816,8 @@ class GPT4oPlugin:
 
     @neovim.command('GPTHold', bang=True)
     def on_GPTHold(self, bang: bool):
+        timer.record('GPTHold enter')
+
         _ = bang
 
         with self.eventignore_guard():
@@ -673,6 +836,8 @@ class GPT4oPlugin:
                     history = self.buffers_history[current_number]
                 history.add_history(self.next_seq(), new_content)
                 history.shrink_to(self.cfg.max_recent_diff_count)
+
+        timer.record('GPTHold exit')
 
     def compute_diff(self, new_content: str, old_content: str, current_path: str = '') -> Optional[str]:
         old_label = 'a'
@@ -708,3 +873,5 @@ class GPT4oPlugin:
 
 if __name__ == '__main__':
     unittest.main()
+
+timer.record('script finish')

@@ -19,6 +19,6 @@
 
 augroup gpt4o
     autocmd!
-    autocmd! InsertLeave * GPTHold!
-    autocmd! BufEnter,CursorHold,BufLeave,BufWritePost * GPTHold
+    " autocmd! InsertLeave * GPTHold!
+    " autocmd! BufEnter,CursorHold,BufLeave,BufWritePost * GPTHold
 augroup end
