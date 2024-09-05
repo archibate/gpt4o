@@ -40,9 +40,9 @@ V = TypeVar('V')
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 
 SPECIAL_FILE_TYPES = {
-    'terminal': ('[terminal]', 'bash'),
-    'toggleterm': ('[terminal]', 'bash'),
-    'quickfix': ('[quickfix]', ''),
+    'terminal': ('[terminal]', 'bash', 'Terminal Output'),
+    'toggleterm': ('[terminal]', 'bash', 'Terminal Output'),
+    'quickfix': ('[quickfix]', '', 'Quickfix Window'),
 }
 
 INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
@@ -264,11 +264,12 @@ class TestBufferHistory(unittest.TestCase):
 
 
 @dataclass
-class ReferencedFile:
+class RefFile:
     path: str
     content: str
     type: str = ''
     score: int = 1
+    special_name: str = ''
 
 
 @dataclass
@@ -287,13 +288,15 @@ class Config:
 
     model: str = 'auto'                    # 'auto' | 'gpt-4o' | 'gpt-4o-mini'
     embedding_model: str = 'auto'          # 'auto' | 'text-embedding-3-small' | 'fastembed'
-    limit_context_tokens: int = 10000
-    context_chunk_tokens: int = 400
-    recent_diff_tokens: int = 600
+    use_tiktoken_for_counting: bool = True
+    limit_context_tokens: int = 3000
+    context_chunk_tokens: int = 1000
+    recent_diff_tokens: int = 700
     max_recent_diff_count: int = 15
-    extra_range_lines: int = 4
     try_treat_terminal_p10k: bool = True
     accept_unlisted_buffers: str = 'yes'  # 'yes' | 'no' | 'if_content_ref'
+    current_buffer_score: int = 3
+    extra_range_lines_gpt4: int = 4
 
 
 @neovim.plugin
@@ -475,28 +478,36 @@ class GPT4oPlugin:
         self.nvim.current.buffer[start:end] = ['']
 
     def treat_terminal_p10k(self, content: str) -> str:
-        if '╭─ ' in content:
-            STANDARD_PROMPT = '❯ '
+        STANDARD_PROMPT = '❯ '
+        if '─╮\n╰─ ' in content:
             content = re.sub(r'❯ |╭─ .* ─╮\n╰─ ', STANDARD_PROMPT, content)
-            content = re.sub(r'\s+─╯$', '', content)
-        return content.strip()
+            content = re.sub(r'\s+─╯', '', content)
+        content = content.strip()
+        content = content.removesuffix(STANDARD_PROMPT.rstrip())
+        content = content.strip()
+        return content
 
-    def buf_into_file(self, buffer, content: str, buf_type: Optional[str] = None) -> ReferencedFile:
+    def buf_into_file(self, buffer, content: str, buf_type: Optional[str] = None) -> RefFile:
         if buf_type is None:
             buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
+        special_name = ''
         if buf_type in SPECIAL_FILE_TYPES:
-            path, file_type = SPECIAL_FILE_TYPES[buf_type]
+            path, file_type, special_name = SPECIAL_FILE_TYPES[buf_type]
             if path == '[terminal]' and self.cfg.try_treat_terminal_p10k:
                 content = self.treat_terminal_p10k(content)
         else:
             path = buffer.name
             file_type = self.nvim.api.get_option_value('filetype', {'buf': buffer.number})
-        return ReferencedFile(path=path, content=content, type=file_type)
+        return RefFile(path=path, content=content, type=file_type, special_name=special_name)
 
-    def get_referenced_files(self, code_sample: str, question: str) -> list[ReferencedFile]:
+    def get_referenced_files(self, code_sample: str, question: str) -> list[RefFile]:
         files = self.get_all_files()
         if self.get_embedding_model():
             files = self.filter_similiar_chunks(code_sample, question, files)
+
+        diffs = self.get_recent_diffs()
+        if diffs:
+            files.append(RefFile(path='diff', content='\n'.join(diffs), type='diff', special_name='Recent changes'))
         return files
 
     def get_recent_diffs(self) -> list[str]:
@@ -578,11 +589,11 @@ class GPT4oPlugin:
         else:
             assert False, self.cfg.accept_unlisted_buffers
 
-    def get_all_files(self) -> list[ReferencedFile]:
+    def get_all_files(self) -> list[RefFile]:
         current_buffer = self.nvim.current.buffer
         current_name = self.simplify_buffer_name(self.buffer_name_or_type(current_buffer)) or '[No Name]'
         current_content = '\n'.join(current_buffer[:])
-        files: list[ReferencedFile] = []
+        files: list[RefFile] = []
         for buffer in self.nvim.buffers:
             if buffer.number == current_buffer.number:
                 continue
@@ -590,22 +601,37 @@ class GPT4oPlugin:
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
                 self.log(f'adding file: {buffer.name}{' ' + buf_type if buf_type else ''}')
                 content = '\n'.join(buffer[:])
-                files.append(self.buf_into_file(buffer, content, buf_type))
+                file = self.buf_into_file(buffer, content, buf_type)
+                if file.content:
+                    files.append(file)
         self.log(f'current file: {current_buffer.name}')
-        files.append(self.buf_into_file(current_buffer, current_content))
-        files[-1].score = 2
+        current_file = self.buf_into_file(current_buffer, current_content)
+        current_file.score = self.cfg.current_buffer_score
+        files.append(current_file)
         return files
 
-    def filter_similiar_chunks(self, code_sample: str, question: str, files: list[ReferencedFile]):
+    def omit_merge_content_chunks(self, contents: list[tuple[int, str]]) -> str:
+        expected_chunkid = 0
+        result = ''
+        for chunkid, chunk in contents:
+            if chunkid != expected_chunkid:
+                result += '\n\n...\n\n'
+            result += chunk
+            expected_chunkid = chunkid + 1
+        return result
+
+    def filter_similiar_chunks(self, code_sample: str, question: str, files: list[RefFile]):
         inputs: list[str] = []
-        sources: list[int] = []
-        # code_sample_lines = code_sample.split('\n')
+        input_chunkids: list[int] = []
+        input_sources: list[int] = []
+        # code_sample_chunks = code_sample.split('\n')
         for fileid, file in enumerate(files):
-            for line in self.split_content_chunks(file.content):
-                line = line.rstrip().lstrip('\n')
-                if line:
-                    inputs.append(line)
-                    sources.append(fileid)
+            for chunkid, chunk in enumerate(self.split_content_chunks(file.content)):
+                chunk = chunk.rstrip().lstrip('\n')
+                if chunk:
+                    inputs.append(chunk)
+                    input_chunkids.append(chunkid)
+                    input_sources.append(fileid)
         prompt = code_sample + '\n' + question
         inputs.append(prompt.rstrip().lstrip('\n'))
         # self.log(f'all chunks:\n{'\n--------\n'.join(inputs)}')
@@ -623,16 +649,16 @@ class GPT4oPlugin:
                 dt = time.monotonic() - t0
                 self.log(f'embedding {dt * 1000:.0f} ms @{self.get_embedding_model()}')
             sample = response[-1]
-            contents: list[list[str]] = [[] for _ in range(len(files))]
-            similiarities = [0.0 for _ in range(len(sources))]
+            file_contents: list[list[tuple[int, str]]] = [[] for _ in range(len(files))]
+            input_sims = [0.0 for _ in range(len(input_sources))]
             for i, output in enumerate(response[:-1]):
-                fileid = sources[i]
-                similiarities[i] = self.cosine_similiarity(output, sample) ** (1 / files[fileid].score)
-            indices = [i for i in range(len(similiarities))]
-            indices.sort(key=lambda i: similiarities[i], reverse=True)
+                fileid = input_sources[i]
+                input_sims[i] = self.cosine_similiarity(output, sample) ** (1 / files[fileid].score)
+            input_indices = [i for i in range(len(input_sims))]
+            input_indices.sort(key=lambda i: input_sims[i], reverse=True)
             total_tokens = 0
-            input_oks = [False for _ in range(len(indices))]
-            for i in indices:
+            input_oks = [False for _ in range(len(input_indices))]
+            for i in input_indices:
                 content = inputs[i]
                 total_tokens += tokens[i]
                 if total_tokens >= self.cfg.limit_context_tokens:
@@ -640,14 +666,14 @@ class GPT4oPlugin:
                 input_oks[i] = True
             for i, ok in enumerate(input_oks):
                 if ok:
-                    fileid = sources[i]
-                    contents[fileid].append(inputs[i])
-            new_files: list[ReferencedFile] = []
-            for i, content in enumerate(contents):
+                    fileid = input_sources[i]
+                    chunkid = input_chunkids[i]
+                    file_contents[fileid].append((chunkid, inputs[i]))
+            new_files: list[RefFile] = []
+            for i, content in enumerate(file_contents):
                 file = files[i]
                 if content:
-                    if file.content != '\n'.join(content):
-                        file.content = '\n\n...\n\n'.join(content)
+                    file.content = self.omit_merge_content_chunks(content)
                     new_files.append(file)
             files = new_files
         return files
@@ -673,14 +699,19 @@ class GPT4oPlugin:
         return result
 
     def count_tokens(self, inputs: list[str]) -> list[int]:
-        try:
-            timer.record('import tiktoken begin')
-            import tiktoken as _
-            timer.record('import tiktoken end')
-        except ImportError:
-            return [(len(input.encode('utf-8')) + 3) // 4 for input in inputs]
-        else:
+        use_tiktoken = self.cfg.use_tiktoken_for_counting
+        if use_tiktoken:
+            try:
+                timer.record('import tiktoken begin')
+                import tiktoken as _
+                timer.record('import tiktoken end')
+            except ImportError:
+                use_tiktoken = False
+
+        if use_tiktoken:
             return self.count_tokens_cache.batched_cached_calc(self.impl_count_tokens, inputs)
+        else:
+            return [(len(input.encode('utf-8')) + 3) // 4 for input in inputs]
 
     def impl_count_tokens(self, inputs: list[str]) -> list[int]:
         import tiktoken
@@ -698,14 +729,16 @@ class GPT4oPlugin:
         else:
             return indent + '[Empty File]'
 
-    def form_context(self, question: str, files: list[ReferencedFile], diffs: list[str]) -> str:
+    def form_context(self, question: str, files: list[RefFile]) -> str:
         if not files:
             return question
         result = 'Use the following context to answer question at the end:\n\n'
         for file in files:
-            result += f'File path: {file.path}\nFile content:\n```{file.type}\n{file.content}\n```\n\n'
-        if diffs:
-            result += f'Recent changes:\n```diff\n{'\n'.join(diffs)}\n```\n\n'
+            if file.special_name:
+                prefix = file.special_name
+            else:
+                prefix = f'File path: {file.path}\nFile content'
+            result += f'{prefix}:\n```{file.type}\n{file.content}\n```\n\n'
         if question:
             result += f'Question: {question}'
         return result
@@ -734,7 +767,7 @@ class GPT4oPlugin:
                 if question:
                     if code.strip():
                         question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-                    question = self.form_context(question=question, files=self.get_referenced_files(code, original_question), diffs=self.get_recent_diffs())
+                    question = self.form_context(question=question, files=self.get_referenced_files(code, original_question))
 
             if force_chat:
                 self.open_scratch('[GPTChat]')
@@ -765,7 +798,7 @@ class GPT4oPlugin:
         if question:
             if code.strip():
                 question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-        question = self.form_context(question=question, files=self.get_referenced_files(code, question), diffs=self.get_recent_diffs())
+        question = self.form_context(question=question, files=self.get_referenced_files(code, question))
         self.alert(question)
 
     def running_guard(self):
@@ -795,8 +828,8 @@ class GPT4oPlugin:
     @neovim.command('GPT4', nargs='*', range=True, bang=True)
     def on_GPT4(self, args: list[str], range_: tuple[int, int], bang: bool):
         start, end = range_
-        start -= self.cfg.extra_range_lines
-        end += self.cfg.extra_range_lines
+        start -= self.cfg.extra_range_lines_gpt4
+        end += self.cfg.extra_range_lines_gpt4
         if start < 1:
             start = 1
         num_lines = len(self.nvim.current.buffer)
@@ -808,6 +841,9 @@ class GPT4oPlugin:
     @neovim.command('GPTSetup', nargs='*', sync=True, allow_nested=False)
     def on_GPTSetup(self, args: list[str]):
         for _ in self.running_guard():
+            if not args:
+                args = list(self.cfg.__dict__.keys())
+            alert_result = []
             for kv in args:
                 kv = kv.split('=', maxsplit=1)
                 k = kv[0]
@@ -820,12 +856,17 @@ class GPT4oPlugin:
                     if hasattr(type_, '__args__') and hasattr(type_.__args__, '__getitem__'):
                         type_ = type_.__args__[0]
                         can_be_none = True
-                    if v == '':
-                        if can_be_none:
-                            v = None
+                    if type_ is bool and v.lower() in ('true', 'false'):
+                        v = v[0] in 'tT'
+                    elif can_be_none and v == '' or v.lower() == 'none':
+                        v = None
                     if v is not None:
                         v = type_(v)
                     setattr(self.cfg, k, v)
+                else:
+                    v = getattr(self.cfg, k)
+                    alert_result.append(f'{k}={v}')
+            self.alert('\n'.join(alert_result))
 
     @contextmanager
     def eventignore_guard(self):
@@ -911,7 +952,6 @@ class TestGPT4oPlugin(unittest.TestCase):
         content = '╭─ ~/Codes/gpt4o.nvim │ main ⇡5 *1 +1 !1 ▓▒░················' \
                   '····························································' \
                   '····················░▒▓ 1 ✘ │ 16:46:18 ─╮\n╰─ cd -q ../build' \
-                  '                                                            ' \
                   '                                                          ─╯'
         content = self.plugin.treat_terminal_p10k(content)
         self.assertEqual(content, '❯ cd -q ../build')
