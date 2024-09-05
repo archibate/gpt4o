@@ -1,11 +1,11 @@
 class Timer:
     def __init__(self):
         import time
-        self.t0 = time.time()
+        self.t0 = time.monotonic()
 
     def record(self, tag: str):
         import time
-        t1 = time.time()
+        t1 = time.monotonic()
         dt = t1 - self.t0
         self.add(tag, dt)
         return dt
@@ -289,10 +289,11 @@ class Config:
     model: str = 'auto'                    # 'auto' | 'gpt-4o' | 'gpt-4o-mini'
     embedding_model: str = 'auto'          # 'auto' | 'text-embedding-3-small' | 'fastembed'
     use_tiktoken_for_counting: bool = True
-    limit_context_tokens: int = 3000
-    context_chunk_tokens: int = 1000
-    recent_diff_tokens: int = 700
-    max_recent_diff_count: int = 15
+    limit_context_tokens: int = 3200
+    context_chunk_tokens: int = 160
+    non_empty_line_chunk_punish: int = 3
+    recent_diff_tokens: int = 640
+    max_recent_diff_count: int = 16
     try_treat_terminal_p10k: bool = True
     accept_unlisted_buffers: str = 'yes'  # 'yes' | 'no' | 'if_content_ref'
     current_buffer_score: int = 3
@@ -610,40 +611,55 @@ class GPT4oPlugin:
         files.append(current_file)
         return files
 
-    def omit_merge_content_chunks(self, contents: list[tuple[int, str]]) -> str:
+    def omit_merge_content_chunks(self, contents: list[tuple[int, str]], chunk_count: int) -> str:
+        if not contents:
+            return ''
         expected_chunkid = 0
-        result = ''
+        result: list[str] = []
+        first = True
         for chunkid, chunk in contents:
             if chunkid != expected_chunkid:
-                result += '\n\n...\n\n'
-            result += chunk
+                if first:
+                    result.append('...\n')
+                else:
+                    result.append('\n...\n')
+                first = False
+            result.append(chunk)
             expected_chunkid = chunkid + 1
-        return result
+        if expected_chunkid != chunk_count:
+            result.append('\n...')
+        return '\n'.join(result)
 
     def filter_similiar_chunks(self, code_sample: str, question: str, files: list[RefFile]):
         inputs: list[str] = []
+        inputs_to_embed: list[str] = []
         input_chunkids: list[int] = []
+        file_chunk_counts: list[int] = []
         input_sources: list[int] = []
-        # code_sample_chunks = code_sample.split('\n')
         for fileid, file in enumerate(files):
+            chunk_count = 0
             for chunkid, chunk in enumerate(self.split_content_chunks(file.content)):
-                chunk = chunk.rstrip().lstrip('\n')
-                if chunk:
+                stripped_chunk = chunk.rstrip().lstrip('\n')
+                if stripped_chunk:
                     inputs.append(chunk)
+                    inputs_to_embed.append(stripped_chunk)
                     input_chunkids.append(chunkid)
                     input_sources.append(fileid)
+                    chunk_count += 1
+            file_chunk_counts.append(chunk_count)
         prompt = code_sample + '\n' + question
-        inputs.append(prompt.rstrip().lstrip('\n'))
-        # self.log(f'all chunks:\n{'\n--------\n'.join(inputs)}')
+        prompt = prompt.rstrip().lstrip('\n')
+        inputs_to_embed.append(prompt)
+        self.log(f'all chunks:\n{'\n--------\n'.join(inputs)}')
         self.log(f'splited into {len(inputs)} chunks')
-        tokens = self.count_tokens(inputs)
+        tokens = self.count_tokens(inputs_to_embed)
         if sum(tokens) >= self.cfg.limit_context_tokens:
             # self.log(f'tokens {sum(tokens)} >= {self.cfg.limit_context_tokens}, clipping')
             if self.cfg.include_time:
                 t0 = time.monotonic()
             else:
                 t0 = None
-            response = self.calculate_embeddings(inputs)
+            response = self.calculate_embeddings(inputs_to_embed)
             if self.cfg.include_time:
                 assert t0
                 dt = time.monotonic() - t0
@@ -659,7 +675,6 @@ class GPT4oPlugin:
             total_tokens = 0
             input_oks = [False for _ in range(len(input_indices))]
             for i in input_indices:
-                content = inputs[i]
                 total_tokens += tokens[i]
                 if total_tokens >= self.cfg.limit_context_tokens:
                     break
@@ -673,7 +688,8 @@ class GPT4oPlugin:
             for i, content in enumerate(file_contents):
                 file = files[i]
                 if content:
-                    file.content = self.omit_merge_content_chunks(content)
+                    chunk_count = file_chunk_counts[i]
+                    file.content = self.omit_merge_content_chunks(content, chunk_count)
                     new_files.append(file)
             files = new_files
         return files
@@ -688,8 +704,8 @@ class GPT4oPlugin:
             accum_lines.append(line)
             accum_tokens += ntoken
             limit = self.cfg.context_chunk_tokens
-            if not line.strip():
-                limit *= 2
+            if line.strip():
+                limit *= self.cfg.non_empty_line_chunk_punish
             if accum_tokens >= limit:
                 result.append('\n'.join(accum_lines))
                 accum_lines = []
@@ -788,17 +804,15 @@ class GPT4oPlugin:
 
     @neovim.command('GPTInfo', nargs='*', range=True)
     def on_GPTInfo(self, args: list[str], range_: tuple[int, int]):
-        # tmp = []
-        # for buffer in self.nvim.buffers:
-        #     tmp.append([buffer.number, self.is_buffer_valid(buffer)])
-        # self.alert(repr(tmp))
-
         question = ' '.join(args)
+        original_question = question = question.strip()
+        range_ = (range_[0] - 1, range_[1])
+        assert range_[0] < range_[1], range_
         code, file_type = self.get_range_code(range_)
-        if question:
-            if code.strip():
-                question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-        question = self.form_context(question=question, files=self.get_referenced_files(code, question))
+        if not question:
+            question = 'Fix, complete or continue writing.'
+        question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
+        question = self.form_context(question=question, files=self.get_referenced_files(code, original_question))
         self.alert(question)
 
     def running_guard(self):
@@ -818,7 +832,7 @@ class GPT4oPlugin:
             else:
                 question = ''
             range_ = (range_[0] - 1, range_[1])
-            assert range_[0] <= range_[1], range_
+            assert range_[0] < range_[1], range_
             self.do_prompt(question=question, range_=range_, force_chat=bang)
 
     @neovim.command('GPT', nargs='*', range=True, bang=True)
