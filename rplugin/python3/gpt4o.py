@@ -30,11 +30,11 @@ import math
 import time
 import re
 
+timer.record('import finish')
+
 T = TypeVar('T')
 K = TypeVar('K')
 V = TypeVar('V')
-
-timer.record('import finish')
 
 
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -190,8 +190,10 @@ class BufferHistory:
     def add_history(self, seq: int, content: str):
         self.history.append((seq, content))
 
-    def shrink_to(self, size: int):
-        # self.history = sorted(self.history, key=lambda x: x[0], reverse=True)[:size]
+    def shrink_to_newer_than(self, min_seq: int):
+        self.history = [(seq, content) for seq, content in self.history if seq >= min_seq]
+
+    def shrink_to_size(self, size: int):
         self.history = self.history[-size:]
 
     def history_newer_than(self, min_seq: int) -> Iterable[tuple[int, str]]:
@@ -212,11 +214,20 @@ class TestBufferHistory(unittest.TestCase):
         self.history.add_history(2, "Second entry")
         self.assertEqual(len(self.history.history), 2)
 
-    def test_shrink_to(self):
+    def test_shrink_to_size(self):
         self.history.add_history(1, "First entry")
         self.history.add_history(2, "Second entry")
         self.history.add_history(3, "Third entry")
-        self.history.shrink_to(2)
+        self.history.shrink_to_size(2)
+        self.assertEqual(len(self.history.history), 2)
+        self.assertEqual(self.history.history[0][1], "Second entry")
+        self.assertEqual(self.history.history[1][1], "Third entry")
+
+    def test_shrink_to_newer_than(self):
+        self.history.add_history(1, "First entry")
+        self.history.add_history(2, "Second entry")
+        self.history.add_history(3, "Third entry")
+        self.history.shrink_to_newer_than(2)
         self.assertEqual(len(self.history.history), 2)
         self.assertEqual(self.history.history[0][1], "Second entry")
         self.assertEqual(self.history.history[1][1], "Third entry")
@@ -819,23 +830,22 @@ class GPT4oPlugin:
         timer.record('GPTHold enter')
 
         _ = bang
-
         with self.eventignore_guard():
             if not self.nvim.api.eval('&modifiable'):
                 return
-    
             new_content = self.nvim.current.buffer[:]
             new_content = '\n'.join(new_content)
-    
             current_number = self.nvim.current.buffer.number
+
             with self.change_lock:
                 if current_number not in self.buffers_history:
                     history = BufferHistory()
                     self.buffers_history[current_number] = history
                 else:
                     history = self.buffers_history[current_number]
-                history.add_history(self.next_seq(), new_content)
-                history.shrink_to(self.cfg.max_recent_diff_count)
+                seq = self.next_seq()
+                history.add_history(seq, new_content)
+                history.shrink_to_newer_than(seq - self.cfg.max_recent_diff_count)
 
         timer.record('GPTHold exit')
 
