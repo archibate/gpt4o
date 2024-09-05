@@ -285,13 +285,15 @@ class Config:
     include_time: bool = True
     timeout: Optional[float] = None
 
-    model: str = 'auto'
-    embedding_model: str = 'auto'
+    model: str = 'auto'                    # 'auto' | 'gpt-4o' | 'gpt-4o-mini'
+    embedding_model: str = 'auto'          # 'auto' | 'text-embedding-3-small' | 'fastembed'
     limit_context_tokens: int = 10000
     context_chunk_tokens: int = 400
     recent_diff_tokens: int = 600
     max_recent_diff_count: int = 15
     extra_range_lines: int = 4
+    try_treat_terminal_p10k: bool = True
+    accept_unlisted_buffers: str = 'yes'  # 'yes' | 'no' | 'if_content_ref'
 
 
 @neovim.plugin
@@ -472,20 +474,20 @@ class GPT4oPlugin:
         start, end = range_
         self.nvim.current.buffer[start:end] = ['']
 
-    def terminal_treat_power10k(self, content: str) -> str:
-        content = re.sub(r'^❯ $', '$ ', content)
-        content = re.sub(r'^╭─ .* ─╮$', '', content)
-        content = re.sub(r'^╰─ ', '$ ', content)
-        content = re.sub(r'\s+─╯$', '', content)
-        return content
+    def treat_terminal_p10k(self, content: str) -> str:
+        if '╭─ ' in content:
+            STANDARD_PROMPT = '❯ '
+            content = re.sub(r'❯ |╭─ .* ─╮\n╰─ ', STANDARD_PROMPT, content)
+            content = re.sub(r'\s+─╯$', '', content)
+        return content.strip()
 
     def buf_into_file(self, buffer, content: str, buf_type: Optional[str] = None) -> ReferencedFile:
         if buf_type is None:
             buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
         if buf_type in SPECIAL_FILE_TYPES:
             path, file_type = SPECIAL_FILE_TYPES[buf_type]
-            if path == '[terminal]':
-                content = self.terminal_treat_power10k(content)
+            if path == '[terminal]' and self.cfg.try_treat_terminal_p10k:
+                content = self.treat_terminal_p10k(content)
         else:
             path = buffer.name
             file_type = self.nvim.api.get_option_value('filetype', {'buf': buffer.number})
@@ -558,13 +560,23 @@ class GPT4oPlugin:
     def is_buffer_related(self, buffer, current_name: str, current_content: str):
         if not self.is_buffer_valid(buffer):
             return False
+        if self.cfg.accept_unlisted_buffers == 'yes':
+            return True
+
         buf_listed = self.nvim.api.get_option_value('buflisted', {'buf': buffer.number})
         if buf_listed:
             return True
-        buffer_name = self.simplify_buffer_name(self.buffer_name_or_type(buffer))
-        content = '\n'.join(buffer[:])
-        if re.search(rf'\b{re.escape(current_name)}\b', content) or (buffer_name and re.search(rf'\b{re.escape(buffer_name)}\b', current_content)):
-            return True
+        if self.cfg.accept_unlisted_buffers == 'no':
+            return False
+
+        elif self.cfg.accept_unlisted_buffers == 'if_content_ref':
+            buffer_name = self.simplify_buffer_name(self.buffer_name_or_type(buffer))
+            content = '\n'.join(buffer[:])
+            if re.search(rf'\b{re.escape(current_name)}\b', content) or (buffer_name and re.search(rf'\b{re.escape(buffer_name)}\b', current_content)):
+                return True
+
+        else:
+            assert False, self.cfg.accept_unlisted_buffers
 
     def get_all_files(self) -> list[ReferencedFile]:
         current_buffer = self.nvim.current.buffer
@@ -880,6 +892,29 @@ class GPT4oPlugin:
         diff = output.decode('utf-8')
         return diff
 
+
+class TestGPT4oPlugin(unittest.TestCase):
+    def setUp(self):
+        nvim: neovim.Nvim = None  # type: ignore
+        self.plugin = GPT4oPlugin(nvim)
+
+    def test_compute_diff(self):
+        diff = self.plugin.compute_diff('a\nb', 'a\nb')
+        self.assertIsNone(diff)
+
+        diff = self.plugin.compute_diff('a\nb', 'a\nb\nc')
+        self.assertEqual(diff, '--- a\n+++ b\n@@ -1,3 +1,2 @@\n a\n-b\n-c\n\\ '
+                         'No newline at end of file\n+b\n\\ No newline at end '
+                         'of file\n')
+
+    def test_treat_terminal_p10k(self):
+        content = '╭─ ~/Codes/gpt4o.nvim │ main ⇡5 *1 +1 !1 ▓▒░················' \
+                  '····························································' \
+                  '····················░▒▓ 1 ✘ │ 16:46:18 ─╮\n╰─ cd -q ../build' \
+                  '                                                            ' \
+                  '                                                          ─╯'
+        content = self.plugin.treat_terminal_p10k(content)
+        self.assertEqual(content, '❯ cd -q ../build')
 
 if __name__ == '__main__':
     unittest.main()
