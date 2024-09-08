@@ -89,31 +89,25 @@ SPECIAL_FILE_TYPES = {
 
 INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
 
-Rules:
-1. The first line consists of 2 numbers, separated by space, is the start and the end line number of the lines range to edit, respectively. The start line number is inclusive, the end line number is exclusive.
-2. The line numbers starting counting from 1, is relative to the code requested to be edited, your output start and end line numbers MUST be in that range.
-3. For the rest of lines, output only the modified code, with no additional text or explanations.
-4. To delete a range of code, output the word DELETE after the line numbers to delete (with out quotes or any indentation).
-4. The code outside of the range indicated by your start and end line numbers are not edited and should not appear in the modified code as response.
-5. The first character of your response (excluding the start and end line numbers) must be the first character of the mofified range of code.
-6. The last character of your response must be the last character of the mofified range of code.
-7. Try minimize the range of lines to be edited, as long as the range of edition can accomplish the user request in a human-readable way.
-8. NEVER use triple backticks (```) or any other markdown formatting in your response.
-9. Do not use any code block indicators, syntax highlighting markers, or any other formatting characters.
-10. Present the code exactly as it would appear in a plain text editor, preserving all whitespace, indentation, and line breaks.
-11. Maintain the original code structure and only make changes as specified by the user's instructions.
-12. Ensure that the modified code is syntactically and semantically correct for the given programming language.
-13. Use consistent indentation and follow language-specific style guidelines.
-14. If the user's request cannot be translated into code changes, respond only with the word NULL (without quotes or any line numbers).
-15. Do not include any comments or explanations within the code unless specifically requested.
-16. Try to follow the same code style as the user's code base looks like.
-17. Assume that any necessary dependencies or libraries are already imported or available.
-18. There will be line marks like '\t// 1' in the input code, ignore them, they are for you to find line number easier.
-19. Your respond MUST NEVER contain line marks like '\t// 1'.
+**Rules:**
 
-IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters. Only the first line may contain two line numbers, the rest of lines MUST NOT contain line numbers.
+1. The first line contains two numbers separated by a space: the start and end line numbers of the lines to edit (inclusive). Line numbers start from 1.
+2. Your output must only include the modified code within the specified range, with no extra text or explanations.
+3. To delete a range of code, output "DELETE" after the line numbers.
+4. Code outside the specified range should not be included in the output.
+5. The first character of your response (excluding line numbers) must match the first character of the modified range of code. The last character must match the last character of the modified range.
+6. Minimize the range of lines to be edited while ensuring the modifications are clear and human-readable.
+7. Do not use any markdown formatting, code block indicators, or syntax highlighting.
+8. Present the code exactly as it would appear in a plain text editor, preserving all whitespace, indentation, and line breaks.
+9. Ensure the modified code is syntactically and semantically correct for the programming language.
+10. Follow consistent indentation and style guidelines relevant to the code base.
+11. Respond with "NULL" if the user's request cannot be reflected into any code change.
+12. Ignore line markers like '\t// 1' in the input code; do not include them in your output.
+13. For multiple ranges to edit, output each range and the modified code separately.
 
-### Example Input 1
+**Important:** Your response must never include any formatting characters. Only the first line may contain two line numbers; the rest of the lines must not include line numbers.
+
+**Example Input 1:**
 
 Edit the following code:
 ```cpp
@@ -126,17 +120,14 @@ int main() {\t// 4
     return 0;\t// 7
 }\t// 8
 ```
-Percisely follow the user instruction: use puts instead.
+Instructions: Replace `std::cout` with `puts`.
 
-### Example Output 1
+**Example Output 1:**
 
-2 6
-#include <cstdio>
-
-int main() {
+5 5
     puts("Hello, world\\n");
 
-### Example Input 2
+**Example Input 2:**
 
 Edit the following code:
 ```cpp
@@ -149,14 +140,14 @@ int main() {\t// 4
     return 0;\t// 7
 }\t// 8
 ```
-Percisely follow the user instruction: remove system pause.
+Instructions: Remove `system("pause");`.
 
-### Example Output 2
+**Example Output 2:**
 
-6 7
+6 6
 DELETE
 
-### Example Input 3
+**Example Input 3:**
 
 Edit the following code:
 ```cpp
@@ -168,12 +159,60 @@ int main() {\t// 4
     return 0;\t// 6
 }\t// 7
 ```
-Percisely follow the user instruction: add system pause.
+Instructions: Insert `system("pause");`.
 
-### Example Output 3
+**Example Output 3:**
 
 6 6
     system("pause");
+    return 0;
+
+**Example Input 4:**
+
+Edit the following code:
+```cpp
+#include <cstdlib>\t// 1
+#include <iostream>\t// 2
+\t// 3
+int main() {\t// 4
+    std::cout << "the square of 2 is " << square(2) << "\\n";\t// 5
+    return 0;\t// 6
+}\t// 7
+```
+Instructions: Implement the missing function `square`.
+
+**Example Output 4:**
+
+3 3
+
+int square(int x) {
+    return x * x;
+}
+
+**Example Input 5:**
+
+Edit the following code:
+```cpp
+#include <cstdlib>\t// 1
+#include <iostream>\t// 2
+\t// 3
+int main() {\t// 4
+    std::cout << "Random: " << rand() << "\\n";\t// 5
+    std::cout << "Hello, world\\n";\t// 6
+    system("pause");\t// 7
+    return 0;\t// 8
+}\t// 9
+```
+Instructions: Replace `system("pause")` with `getch` from `<conio.h>`. And remove the `rand()` usage.
+
+**Example Output 5:**
+
+1 1
+#include <conio.h>
+5 5
+DELETE
+7 7
+    getch();
 '''
 
 INSTRUCTION_CHAT = '''You are an AI programming assistant.
@@ -600,22 +639,21 @@ class GPT4oPlugin:
         if start > end:
             return None
 
-        return range_[0] + start - 1, range_[0] + end - 1
+        return range_[0] + start - 1, range_[0] + end
 
-    def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int]) -> Optional[tuple[int, int]]:
-        if not self.running:
-            return
-
+    def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int]) -> bool:
         # self.log('initial range: (%d, %d)' % range_)
         with self.paste_mode_guard():
             first_line = ''
             first_line_done = False
             first = True
-            first_chunk = True
+            accum = ''
 
+            if not self.running:
+                return True
             for chunk in self.streaming_response(question, instruction):
                 if not self.running:
-                    break
+                    return True
 
                 if not first_line_done:
                     first_line += chunk
@@ -624,7 +662,8 @@ class GPT4oPlugin:
                         chunk = first_line.split('\n', maxsplit=1)[1]
                         result = self.analysis_first_line(first_line, range_)
                         if result is None:
-                            return None
+                            self.log('null first line: ' + first_line)
+                            return False
                         range_ = result
                         if not chunk:
                             continue
@@ -644,17 +683,26 @@ class GPT4oPlugin:
                             self.nvim.command(f'undojoin|normal! O')
                         first = False
 
-                    if first_chunk:
-                        if chunk.strip() == 'DELETE':
-                            self.nvim.command(f'undojoin|normal! dd')
-                            self.nvim.command('redraw')
-                            break
-                        first_chunk = False
+                    accum += chunk
 
                     self.nvim.command(f'undojoin|normal! a{chunk}')
                     self.nvim.command('redraw')
 
-            return range_
+                    if accum.strip() == 'DELETE':
+                        self.nvim.command(f'undojoin|normal! dd')
+                        self.nvim.command('redraw')
+                        continue
+
+                    # if accum.endswith('\nMORE\n'):
+                    #     self.nvim.command(f'undojoin|normal! dd')
+                    #     self.nvim.command('redraw')
+                    #     first_line = ''
+                    #     first_line_done = False
+                    #     first = True
+                    #     accum = ''
+                    #     continue
+
+            return True
 
     def buffer_slice(self, range_: tuple[int, int]) -> str:
         start, end = range_
@@ -1145,8 +1193,7 @@ class GPT4oPlugin:
         finally:
             self.nvim.command(f'set eventignore={ei_backup}')
 
-    # @neovim.autocmd('InsertLeave,BufEnter,CursorHold,BufLeave,BufWritePost')
-    @neovim.autocmd('TextChanged,TextChangedI,BufEnter')
+    @neovim.autocmd('InsertLeave,BufEnter,CursorHold,BufLeave,BufWritePost')
     def on_GPTHold(self):
         # timer.record('GPTHold enter')
 
