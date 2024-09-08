@@ -69,6 +69,58 @@ SPECIAL_FILE_TYPES = {
     'quickfix': ('[quickfix]', '', 'Quickfix Window'),
 }
 
+# INSTRUCTION_INTENT = '''You are a code intent recognition assistant. Your task is to identify the user's intent based on the code context.
+#
+# You are given a user instruction and code context to determine which of the following the user's intent belongs to, and output the corresponding JSON to represent your recognition result:
+#
+# 1. If the user requests to edit the code, please predict which lines of code need to be modified based on the user interest. Suppose '<start>' and '<end>' are positive integers representing the starting and final line number (closed interval) of code that the user may wants to edit, then you output {"intent": "edit", "start": <start>, "end": <end>}.
+# 2. If the user raises a question or chats, then you output {"intent": "chat"}.
+#
+# Rules:
+#
+# 1. Always output JSON format that conforms to the format listed above, do not explain or append text.
+# 2. Ensure that your output can be correctly parsed by a JSON parser.
+# 3. The intent field in the output JSON must be one of the intentions described above, NEVER output intentions that are not specified in the previous text.
+# 4. When the user's intention is to edit code, your task is to determine which lines of code need to be modified based on the user prompt, no need to output the edited code.
+# 4. For the 'edit' intent, The start and end field must be positive integers, without quotes.
+# 5. Output a single JSON object only, NEVER output multiple ranges to edit.
+#
+# IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
+
+INSTRUCTION_INTENT = '''You are a code intent recognition assistant. Your task is to identify the user's intent based on the code context.
+
+Your input consists of a list of files in the current codebase, a user instruction, and line number where the user cursor is hovering at.
+Your output consists of 2 numbers, separated by space, which must be output in the following order:
+
+1. the begin line number to be edited (inclusive).
+2. the end line number to be edited (inclusive).
+
+Output only the above 2 numbers, with no additional text or explanations.
+You only need to output the line numbers to be edited, NEVER output the edited code directly.
+
+### Input example
+
+```python
+1 import world
+2
+3 def main():
+4
+5 if __name__ == '__main__':
+6     main()
+```
+
+Percisely follow the user instruction: edit the main function to make it complete.
+Current cursor at line: 4
+
+### Output example
+
+hello.py
+3
+4
+```
+
+'''
+
 INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to modify the provided code based on the user's instructions.
 
 Rules:
@@ -86,6 +138,8 @@ Rules:
 12. Assume that any necessary dependencies or libraries are already imported or available.
 
 IMPORTANT: Your response must NEVER begin or end with triple backticks, single backticks, or any other formatting characters.'''
+
+# 11. If the code requested by the user includes line numbers, please output a special tag at the beginning of the code with the content 'FROM <line1> TO <line2>' (without quotes), indicating the actual line number range that needs to be modified. <line1> and <line2> represent the line numbers at the beginning and end of the interval to be edited, respectively. Code outside the range of <line1> and <line2> will not be modified.
 
 INSTRUCTION_CHAT = '''You are an AI programming assistant.
 Follow the user's requirements carefully & to the letter.
@@ -298,8 +352,8 @@ class RefFile:
 
 @dataclass
 class Config:
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
+    api_key: Optional[str] = os.environ['DEEPSEEK_API_KEY']
+    base_url: Optional[str] = 'https://api.deepseek.com/v1' # None
     organization: Optional[str] = None
     project: Optional[str] = None
     max_tokens: Optional[int] = None
@@ -313,14 +367,14 @@ class Config:
     model: str = 'auto'                    # 'auto' | 'gpt-4o' | 'gpt-4o-mini'
     embedding_model: str = 'auto'          # 'auto' | 'text-embedding-3-small' | 'fastembed'
     use_tiktoken_for_counting: bool = True
-    use_fastembed_for_embedding: bool = True
+    use_fastembed_for_embedding: bool = False
     limit_context_tokens: int = 3200
     context_chunk_tokens: int = 160
     non_empty_line_chunk_punish: int = 3
     recent_diff_tokens: int = 640
     max_recent_diff_count: int = 16
     try_treat_terminal_p10k: bool = True
-    accept_unlisted_buffers: str = 'yes'  # 'yes' | 'no' | 'if_content_ref'
+    accept_unlisted_buffers: str = 'yes'   # 'yes' | 'no' | 'if_content_ref'
     current_buffer_score: int = 3
     extra_range_lines_gpt4: int = 4
 
@@ -333,7 +387,7 @@ class GPT4oPlugin:
         self.cfg = Config()
         self._real_client = None
         self._real_fastembed_model = None
-        self.change_lock = threading.Lock()
+        self.history_lock = threading.Lock()
         self.buffers_history: dict[int, BufferHistory] = {}
         self.seq_lock = threading.Lock()
         self.embedding_cache: LruCache[str, list[float]] = LruCache()
@@ -412,14 +466,17 @@ class GPT4oPlugin:
             'gpt-4': (30, 60),
             'gpt-4-32k': (60, 120),
             'gpt-3.5-turbo': (3, 6),
-            'deepseek-coder': (0.14, 0.28),
+            'deepseek-coder': (0.14, 0.28),  # 200 invokes per rmb
             'text-embedding-3-small': (0.02, 0),
             'text-embedding-3-large': (0.13, 0),
         }
         if model in pricing:
             prompt_price, completion_price = pricing[model]
-            price = (usage.prompt_tokens * prompt_price + getattr(usage, 'completion_tokens', 0) * completion_price) / 1000000
-            self.log(f'${price:.6f} @{model}')
+            price = usage.prompt_tokens * prompt_price
+            price += getattr(usage, 'completion_tokens', 0) * completion_price
+            price /= 1000000
+            if price > 0:
+                self.log(f'${price:.6f} @{model}')
 
     def check_time(self, sequence: Callable[[], Iterable[T]], model: str) -> Iterable[T]:
         if not self.cfg.include_time:
@@ -477,9 +534,10 @@ class GPT4oPlugin:
         except __import__(client.__module__).OpenAIError:
             error = traceback.format_exc()
             self.log(error)
+            self.alert(error, 'ERROR')
             yield error
 
-    def submit_question(self, question: str, instruction: str, range_: tuple[int, int], null_token: Optional[str] = None) -> bool:
+    def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int], null_token: Optional[str] = None) -> bool:
         self.nvim.command('set paste')
         try:
             first = True
@@ -547,7 +605,7 @@ class GPT4oPlugin:
 
         min_seq = self.seq - self.cfg.max_recent_diff_count
         history_list: list[tuple[int, int, str]] = []
-        with self.change_lock:
+        with self.history_lock:
             for bufnr, history in self.buffers_history.items():
                 if bufnr not in buffers:
                     continue
@@ -774,10 +832,12 @@ class GPT4oPlugin:
         else:
             return indent + '[Empty File]'
 
-    def form_context(self, question: str, files: list[RefFile]) -> str:
+    def form_context(self, question: str, files: list[RefFile], prefix: Optional[str] = None) -> str:
         if not files:
             return question
-        result = 'Use the following context to answer question at the end:\n\n'
+        if prefix is None:
+            prefix = 'Use the following context to answer question at the end:\n\n'
+        result = prefix
         for file in files:
             if file.special_name:
                 prefix = file.special_name
@@ -799,28 +859,69 @@ class GPT4oPlugin:
     def alert(self, message: str, level: str = 'INFO'):
         self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level})')
 
-    def do_prompt(self, question: str, range_: tuple[int, int], force_chat: bool):
+    def add_line_numbers(self, lines: list[str]) -> str:
+        return '\n'.join(lines)  # TODO
+
+    # def intent_recognize(self, question: str, range_: tuple[int, int]) -> tuple[str, tuple[int, int]]:
+    #     answer = ''
+    #     question = self.add_line_numbers(self.nvim.current.buffer[range_[0]:range_[1]])
+    #     self.log('intent: ' + answer)
+    #     for chunk in self.streaming_response(question, INSTRUCTION_INTENT):
+    #         answer += chunk
+    #     self.log('intent: ' + answer)
+    #     try:
+    #         intent = json.loads(answer)
+    #     except json.JSONDecodeError:
+    #         return 'edit'
+    #     else:
+
+    def extent_lines(self, range_: tuple[int, int], extents: int) -> tuple[int, int]:
+        start, end = range_
+        start -= extents
+        end += extents
+        if start < 1:
+            start = 1
+        num_lines = len(self.nvim.current.buffer)
+        if end > num_lines:
+            end = num_lines
+        range_ = start, end
+        return range_
+
+    def do_prompt(self, question: str, range_: tuple[int, int], intent: str):
         code, file_type = self.get_range_code(range_)
-        original_question = question = question.strip()
+        question = question = question.strip()
+        files = self.get_referenced_files(code, question)
+
+        intent_was_auto = intent == 'auto'
+        if intent_was_auto:
+            intent = 'edit'
 
         while True:
-            if not force_chat:
+            if intent == 'edit':
                 if not question:
                     question = 'Fix, complete or continue writing.'
                 question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
-            else:
+            elif intent == 'chat':
                 if question:
                     if code.strip():
                         question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
-                    question = self.form_context(question=question, files=self.get_referenced_files(code, original_question))
+                    question = self.form_context(question=question, files=files)
+            else:
+                assert False, intent
 
-            if force_chat:
+            if intent == 'chat':
                 self.open_scratch('[GPTChat]')
             if question:
-                instruction = INSTRUCTION_EDIT if not force_chat else INSTRUCTION_CHAT
-                success = self.submit_question(question, instruction=instruction, range_=range_)
-                if not success:
-                    force_chat = True
+                if intent == 'edit':
+                    instruction = INSTRUCTION_EDIT
+                elif intent == 'chat':
+                    instruction = INSTRUCTION_CHAT
+                else:
+                    assert False, intent
+
+                success = self.streaming_insert(question, instruction=instruction, range_=range_)
+                if not success and intent_was_auto:
+                    intent = 'chat'
                     continue
             break
 
@@ -841,7 +942,8 @@ class GPT4oPlugin:
         if not question:
             question = 'Fix, complete or continue writing.'
         question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
-        question = self.form_context(question=question, files=self.get_referenced_files(code, original_question))
+        files = self.get_referenced_files(code, original_question)
+        question = self.form_context(question=question, files=files)
         self.alert(question)
 
     def running_guard(self):
@@ -854,7 +956,7 @@ class GPT4oPlugin:
         finally:
             self.running = False
 
-    def do_gpt_range(self, args: list[str], range_: tuple[int, int], bang: bool):
+    def do_gpt_range(self, args: list[str], range_: tuple[int, int], intent: str):
         for _ in self.running_guard():
             if args:
                 question = ' '.join(args)
@@ -862,26 +964,37 @@ class GPT4oPlugin:
                 question = ''
             range_ = (range_[0] - 1, range_[1])
             assert range_[0] < range_[1], range_
-            self.do_prompt(question=question, range_=range_, force_chat=bang)
 
-    @neovim.command('GPT', nargs='*', range=True, bang=True)
-    def on_GPT(self, args: list[str], range_: tuple[int, int], bang: bool):
-        self.do_gpt_range(args, range_, bang)
+            # if intent == 'intent':
+            #     intent, range_ = self.intent_recognize(question, range_)
+            self.do_prompt(question=question, range_=range_, intent=intent)
 
-    @neovim.command('GPT4', nargs='*', range=True, bang=True)
-    def on_GPT4(self, args: list[str], range_: tuple[int, int], bang: bool):
-        start, end = range_
-        start -= self.cfg.extra_range_lines_gpt4
-        end += self.cfg.extra_range_lines_gpt4
-        if start < 1:
-            start = 1
-        num_lines = len(self.nvim.current.buffer)
-        if end > num_lines:
-            end = num_lines
-        range_ = start, end
-        self.do_gpt_range(args, range_, bang)
+    @neovim.command('GPTChat', nargs='*', range=True)
+    def on_GPTChat(self, args: list[str], range_: tuple[int, int]):
+        self.do_gpt_range(args, range_, 'chat')
 
-    @neovim.command('GPTSetup', nargs='*', sync=True, allow_nested=False)
+    @neovim.command('GPTEdit', nargs='*', range=True)
+    def on_GPTEdit(self, args: list[str], range_: tuple[int, int]):
+        self.do_gpt_range(args, range_, 'edit')
+
+    @neovim.command('GPTIntent', nargs='*', range=True)
+    def on_GPTIntent(self, args: list[str], range_: tuple[int, int]):
+        self.do_gpt_range(args, range_, 'intent')
+
+    # @neovim.command('GPT4', nargs='*', range=True, bang=True)
+    # def on_GPT4(self, args: list[str], range_: tuple[int, int], bang: bool):
+    #     start, end = range_
+    #     start -= self.cfg.extra_range_lines_gpt4
+    #     end += self.cfg.extra_range_lines_gpt4
+    #     if start < 1:
+    #         start = 1
+    #     num_lines = len(self.nvim.current.buffer)
+    #     if end > num_lines:
+    #         end = num_lines
+    #     range_ = start, end
+    #     self.do_gpt_range(args, range_, bang)
+
+    @neovim.command('GPTSetup', nargs='*')
     def on_GPTSetup(self, args: list[str]):
         for _ in self.running_guard():
             if not args:
@@ -922,7 +1035,7 @@ class GPT4oPlugin:
             self.nvim.command(f'set eventignore={ei_backup}')
 
     # @neovim.autocmd('InsertLeave,BufEnter,CursorHold,BufLeave,BufWritePost')
-    @neovim.autocmd('InsertLeave,BufEnter,CursorHold,BufLeave,BufWritePost')
+    @neovim.autocmd('TextChanged,TextChangedI,BufEnter')
     def on_GPTHold(self):
         timer.record('GPTHold enter')
 
@@ -933,7 +1046,7 @@ class GPT4oPlugin:
             new_content = '\n'.join(new_content)
             current_number = self.nvim.current.buffer.number
 
-            with self.change_lock:
+            with self.history_lock:
                 if current_number not in self.buffers_history:
                     history = BufferHistory()
                     self.buffers_history[current_number] = history

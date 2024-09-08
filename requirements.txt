@@ -1,4 +1,4 @@
-openai>=1.44.0
 neovim
-tiktoken
+openai>=1.44.0
+tiktoken>=0.7.0
 fastembed
