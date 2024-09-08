@@ -11,8 +11,8 @@ class Timer:
         return dt
 
     def add(self, tag: str, dt: float):
-        with open('/tmp/gpt4o-timer.log', 'a') as f:
-            f.write(f'{tag}: {dt:.3f}\n')
+        with open('/tmp/gpt4o.log', 'a') as f:
+            f.write(f'[timer] {tag}: {dt:.3f}\n')
 
 timer = Timer()
 
@@ -30,13 +30,21 @@ import time
 import os
 import re
 
+T = TypeVar('T')
+K = TypeVar('K')
+V = TypeVar('V')
+
 try:
     import neovim
+
 except ImportError:
     @eval("lambda x: setattr(globals(), 'neovim', x)")
     class Neovim:
         def plugin(self, cls):
             return cls
+
+        class Nvim:
+            pass
 
         def __getattr__(self, _):
             def decorator(*args, **kwargs):
@@ -46,11 +54,9 @@ except ImportError:
                 return wrapper
             return decorator
 
-timer.record('import finish')
+    assert neovim  # type: ignore
 
-T = TypeVar('T')
-K = TypeVar('K')
-V = TypeVar('V')
+timer.record('import finish')
 
 
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -107,11 +113,11 @@ class TestTimer(unittest.TestCase):
         self.assertGreater(self.timer.t0, 0)
 
     def test_add(self):
-        with open('/tmp/gpt4o-timer.log', 'w') as f:
+        with open('/tmp/gpt4o.log', 'w') as f:
             pass
         self.timer.add('test', 1)
-        with open('/tmp/gpt4o-timer.log', 'r') as f:
-            self.assertEqual(f.read(), 'test: 1.000\n')
+        with open('/tmp/gpt4o.log', 'r') as f:
+            self.assertEqual(f.read(), '[timer] test: 1.000\n')
 
     def test_timer(self):
         self.timer.record('test')
@@ -915,11 +921,11 @@ class GPT4oPlugin:
         finally:
             self.nvim.command(f'set eventignore={ei_backup}')
 
-    @neovim.command('GPTHold', bang=True)
-    def on_GPTHold(self, bang: bool):
+    # @neovim.autocmd('InsertLeave,BufEnter,CursorHold,BufLeave,BufWritePost')
+    @neovim.autocmd('InsertLeave,BufEnter,CursorHold,BufLeave,BufWritePost')
+    def on_GPTHold(self):
         timer.record('GPTHold enter')
 
-        _ = bang
         with self.eventignore_guard():
             if not self.nvim.api.eval('&modifiable'):
                 return
@@ -955,12 +961,11 @@ class GPT4oPlugin:
                 f.write(old_content)
             with open(new_file, 'w') as f:
                 f.write(new_content)
-            with subprocess.Popen([
-                'diff', '-u', '-d',
-                '--label', old_label,
-                '--label', new_label,
-                str(old_file), str(new_file),
-            ],
+            with subprocess.Popen(['diff', '-u', '-d',
+                                   '--label', old_label,
+                                   '--label', new_label,
+                                   str(old_file), str(new_file),
+                                   ],
                                   stdin=subprocess.DEVNULL,
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE,
