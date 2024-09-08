@@ -387,8 +387,10 @@ class RefFile:
 
 @dataclass
 class Config:
-    api_key: Optional[str] = os.environ['DEEPSEEK_API_KEY']
-    base_url: Optional[str] = 'https://api.deepseek.com/v1' # None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    # api_key: Optional[str] = os.environ.get('DEEPSEEK_API_KEY')
+    # base_url: Optional[str] = 'https://api.deepseek.com/v1'
     organization: Optional[str] = None
     project: Optional[str] = None
     max_tokens: Optional[int] = None
@@ -556,15 +558,19 @@ class GPT4oPlugin:
             )
 
             answer = ''
-            for chunk in self.check_time(completion, model):
-                if chunk.usage:
-                    self.check_price(chunk.usage, model)
-                if chunk.choices:
-                    content = chunk.choices[0].delta.content
-                    if content:
-                        answer += content
-                        yield content
-            self.log(answer)
+            try:
+                for chunk in self.check_time(completion, model):
+                    if chunk.usage:
+                        self.check_price(chunk.usage, model)
+                    if chunk.choices:
+                        content = chunk.choices[0].delta.content
+                        if content:
+                            answer += content
+                            yield content
+            finally:
+                if not answer:
+                    answer = '[empty answer]'
+                self.log(answer)
 
         except __import__(client.__module__).OpenAIError:
             error = traceback.format_exc()
@@ -600,12 +606,12 @@ class GPT4oPlugin:
         if not self.running:
             return
 
-        self.log('initial range: (%d, %d)' % range_)
-
+        # self.log('initial range: (%d, %d)' % range_)
         with self.paste_mode_guard():
             first_line = ''
             first_line_done = False
             first = True
+            first_chunk = True
 
             for chunk in self.streaming_response(question, instruction):
                 if not self.running:
@@ -625,18 +631,26 @@ class GPT4oPlugin:
                     else:
                         continue
 
-                if first:
-                    self.log('final range: (%d, %d)' % range_)
-                    if range_[0] < range_[1]:
-                        self.log(f'normal! {range_[0] + 1}G')
-                        self.nvim.command(f'normal! {range_[0] + 1}G')
-                        self.log('delete: ' + '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]]))
-                        self.nvim.current.buffer[range_[0]:range_[1]] = ['']
-                    else:
-                        self.nvim.command(f'normal! {range_[0] + 1}G')
-                        self.nvim.command(f'undojoin|normal! O')
-                    first = False
                 if chunk:
+                    if first:
+                        # self.log('final range: (%d, %d)' % range_)
+                        if range_[0] < range_[1]:
+                            # self.log(f'normal! {range_[0] + 1}G')
+                            self.nvim.command(f'normal! {range_[0] + 1}G')
+                            # self.log('replacing:\n' + '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]]))
+                            self.nvim.current.buffer[range_[0]:range_[1]] = ['']
+                        else:
+                            self.nvim.command(f'normal! {range_[0] + 1}G')
+                            self.nvim.command(f'undojoin|normal! O')
+                        first = False
+
+                    if first_chunk:
+                        if chunk.strip() == 'DELETE':
+                            self.nvim.command(f'undojoin|normal! dd')
+                            self.nvim.command('redraw')
+                            break
+                        first_chunk = False
+
                     self.nvim.command(f'undojoin|normal! a{chunk}')
                     self.nvim.command('redraw')
 
@@ -705,7 +719,9 @@ class GPT4oPlugin:
         changes: list[str] = []
         for _, bufnr, content in history_list:
             buffer = buffers[bufnr]
-            new_content = '\n'.join(buffer[:])
+            new_content = buffer[:]
+            self.ensure_new_line_at_eof(new_content)
+            new_content = '\n'.join(new_content)
             buffer_path = self.buffer_name_or_type(buffer)
             diff = self.compute_diff(new_content, content, buffer_path)
             if diff:
@@ -945,23 +961,27 @@ class GPT4oPlugin:
     def alert(self, message: str, level: str = 'INFO'):
         self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level})')
 
+    def ensure_new_line_at_eof(self, lines: list[str]):
+        if len(lines) == 0 or lines[-1] != '':
+            lines.append('')
+
     def add_line_numbers_suffix(self, lines: list[str]) -> str:
         results = []
+        self.ensure_new_line_at_eof(lines)
         for i, line in enumerate(lines):
             lineno = i + 1
             results.append(f'{line}\t// {lineno}')
-        results.append(f'\t// {len(lines) + 1}')
         return '\n'.join(results)
 
     def add_line_numbers_prefix(self, lines: list[str]) -> str:
         results = []
+        self.ensure_new_line_at_eof(lines)
         for i, line in enumerate(lines):
             lineno = i + 1
             if line.strip():
                 results.append(f'{lineno} {line}')
             else:
                 results.append(f'{lineno}')
-        results.append(f'{len(lines) + 1}')
         return '\n'.join(results)
 
     def extent_lines(self, range_: tuple[int, int], extents: int) -> tuple[int, int]:
