@@ -25,10 +25,26 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import Callable, Generic, Optional, Iterable, TypeVar
 import tempfile
-import neovim
 import math
 import time
+import os
 import re
+
+try:
+    import neovim
+except ImportError:
+    @eval("lambda x: setattr(globals(), 'neovim', x)")
+    class Neovim:
+        def plugin(self, cls):
+            return cls
+
+        def __getattr__(self, _):
+            def decorator(*args, **kwargs):
+                _ = args, kwargs
+                def wrapper(func):
+                    return func
+                return wrapper
+            return decorator
 
 timer.record('import finish')
 
@@ -38,6 +54,8 @@ V = TypeVar('V')
 
 
 DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+DEFAULT_OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small'
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-coder'
 
 SPECIAL_FILE_TYPES = {
     'terminal': ('[terminal]', 'bash', 'Terminal Output'),
@@ -289,6 +307,7 @@ class Config:
     model: str = 'auto'                    # 'auto' | 'gpt-4o' | 'gpt-4o-mini'
     embedding_model: str = 'auto'          # 'auto' | 'text-embedding-3-small' | 'fastembed'
     use_tiktoken_for_counting: bool = True
+    use_fastembed_for_embedding: bool = True
     limit_context_tokens: int = 3200
     context_chunk_tokens: int = 160
     non_empty_line_chunk_punish: int = 3
@@ -322,14 +341,18 @@ class GPT4oPlugin:
 
     def get_embedding_model(self) -> str:
         if self.cfg.embedding_model == 'auto':
-            try:
-                timer.record('import fastembed begin')
-                import fastembed as _
-                timer.record('import fastembed end')
-                return 'fastembed'
-            except ImportError:
+            use_fastembed = self.cfg.use_fastembed_for_embedding
+            if use_fastembed:
+                try:
+                    timer.record('import fastembed begin')
+                    import fastembed as _
+                    timer.record('import fastembed end')
+                    return 'fastembed'
+                except ImportError:
+                    use_fastembed = False
+            if not use_fastembed:
                 if 'openai' in self.get_openai_client().base_url.host:
-                    return 'text-embedding-3-small'
+                    return DEFAULT_OPENAI_EMBEDDING_MODEL
                 else:
                     return ''
         return self.cfg.embedding_model
@@ -415,7 +438,7 @@ class GPT4oPlugin:
                 if 'openai' in client.base_url.host:
                     model = DEFAULT_OPENAI_MODEL
                 elif 'deepseek' in client.base_url.host:
-                    model = 'deepseek-coder'
+                    model = DEFAULT_DEEPSEEK_MODEL
                 else:
                     model = DEFAULT_OPENAI_MODEL
             self.log(question)
@@ -600,7 +623,7 @@ class GPT4oPlugin:
                 continue
             if self.is_buffer_related(buffer, current_name, current_content):
                 buf_type = self.nvim.api.get_option_value('buftype', {'buf': buffer.number})
-                self.log(f'adding file: {buffer.name}{' ' + buf_type if buf_type else ''}')
+                self.log(f'adding file: {buffer.name}{" " + buf_type if buf_type else ""}')
                 content = '\n'.join(buffer[:])
                 file = self.buf_into_file(buffer, content, buf_type)
                 if file.content:
@@ -650,7 +673,7 @@ class GPT4oPlugin:
         prompt = code_sample + '\n' + question
         prompt = prompt.rstrip().lstrip('\n')
         inputs_to_embed.append(prompt)
-        self.log(f'all chunks:\n{'\n--------\n'.join(inputs)}')
+        # self.log(f'all chunks:\n{'\n--------\n'.join(inputs)}')
         self.log(f'splited into {len(inputs)} chunks')
         tokens = self.count_tokens(inputs_to_embed)
         if sum(tokens) >= self.cfg.limit_context_tokens:
@@ -932,8 +955,17 @@ class GPT4oPlugin:
                 f.write(old_content)
             with open(new_file, 'w') as f:
                 f.write(new_content)
-            with subprocess.Popen(['diff', '-u', '-d', '--label', old_label, '--label', new_label, str(old_file), str(new_file)],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+            with subprocess.Popen([
+                'diff', '-u', '-d',
+                '--label', old_label,
+                '--label', new_label,
+                str(old_file), str(new_file),
+            ],
+                                  stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE,
+                                  env=dict(os.environ, LC_ALL='C'),
+                                  ) as proc:
                 output, error = proc.communicate()
                 if error:
                     self.alert(error.decode('utf-8'), 'ERROR')
