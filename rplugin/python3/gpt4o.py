@@ -60,7 +60,7 @@ except ImportError:
 timer.record('import finish')
 
 
-DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+DEFAULT_OPENAI_MODEL = 'gpt-4o'
 DEFAULT_OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small'
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-coder'
 
@@ -213,8 +213,7 @@ Instructions: Replace `system("pause")` with `getch` from `<conio.h>`. And remov
 5 5
 DELETE
 7 7
-    getch();
-'''
+    getch();'''
 
 INSTRUCTION_CHAT = '''You are an AI programming assistant.
 Follow the user's requirements carefully & to the letter.
@@ -435,6 +434,7 @@ class Config:
     project: Optional[str] = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = 0.0
+    seed: Optional[int] = 0
     frequency_penalty: Optional[float] = None
     presence_penalty: Optional[float] = None
     include_usage: bool = True
@@ -586,6 +586,7 @@ class GPT4oPlugin:
             completion = lambda: client.chat.completions.create(
                 model=model,
                 temperature=self.cfg.temperature,
+                seed=self.cfg.seed,
                 frequency_penalty=self.cfg.frequency_penalty,
                 presence_penalty=self.cfg.presence_penalty,
                 max_tokens=self.cfg.max_tokens,
@@ -710,32 +711,44 @@ class GPT4oPlugin:
     def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int]) -> bool:
         with self.paste_mode_guard():
             any_append_or_delete = False
-            first_append_after_goto = True
+            current_pos = range_[1]
+            goto_range = None
+            goto_history = {}
 
             for kind, chunk in self.parse_response(self.streaming_response(question, instruction)):
                 self.log(repr((kind, chunk)))
                 if kind == 'GOTO':
                     start, end = chunk.split(' ')
-                    range_ = (range_[0] + int(start), range_[1] + int(end))
-                    first_append_after_goto = True
+                    goto_range = (range_[0] + int(start) - 1, range_[0] + int(end))
 
                 elif kind == 'APPEND':
-                    if first_append_after_goto:
-                        if range_[0] < range_[1]:
-                            self.nvim.command(f'normal! {range_[0] + 1}G')
-                            self.nvim.current.buffer[range_[0]:range_[1]] = ['']
+                    if goto_range is not None:
+                        offset = 1
+                        for pos, inserted_lines in goto_history.items():
+                            if pos <= goto_range[0]:
+                                offset += inserted_lines
+                        if goto_range[0] < goto_range[1]:
+                            self.nvim.command(f'normal! {goto_range[0] + offset}G')
+                            self.nvim.command(f'normal! {goto_range[1] - goto_range[0]}cc')
                         else:
-                            self.nvim.command(f'normal! {range_[0] + 1}G')
-                            self.nvim.command(f'undojoin|normal! O')
-                        first_append_after_goto = False
+                            self.nvim.command(f'normal! {goto_range[0] + offset}G')
+                            self.nvim.command(f'normal! O')
+                        current_pos = goto_range[1]
+                        goto_history.setdefault(current_pos, 0)
+                        goto_history[current_pos] += 1 - (goto_range[1] - goto_range[0])
+                        goto_range = None
 
                     self.nvim.command(f'undojoin|normal! a{chunk}')
                     self.nvim.command('redraw')
+                    if '\n' in chunk:
+                        goto_history[current_pos] += chunk.count('\n')
                     any_append_or_delete = True
 
                 elif kind == 'DELETE':
                     self.nvim.command(f'undojoin|normal! dd')
                     self.nvim.command('redraw')
+                    goto_history.setdefault(current_pos, 0)
+                    goto_history[current_pos] -= 1
                     any_append_or_delete = True
 
                 elif kind == 'NULL':
