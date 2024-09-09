@@ -639,68 +639,87 @@ class GPT4oPlugin:
         if start > end:
             return None
 
-        return range_[0] + start - 1, range_[0] + end
+        return start - 1, end
+
+    @staticmethod
+    def parse_response(response: Iterable[str]) -> Iterable[tuple[str, str]]:
+        state = 'BEGIN_LINE'
+        stack = []
+        for chunk in response:
+            if not chunk:
+                continue
+
+            stack.append(chunk)
+            while stack:
+                chunk = stack.pop()
+
+                capture = ''
+                for i, c in enumerate(chunk):
+                    if state == 'NO_CAPTURE':
+                        chunk = capture + chunk[i:]
+                        index = chunk.find('\n')
+                        if index == -1:
+                            yield 'APPEND', chunk
+                        else:
+                            yield 'APPEND', chunk[:index + 1]
+                            rest = chunk[index + 1:]
+                            if rest:
+                                stack.append(rest)
+                        break
+
+                    capture += c
+                    if state == 'BEGIN_LINE':
+                        if c in '0123456789':
+                            state = 'CAPTURE_LINE_1'
+                        else:
+                            state = 'NO_CAPTURE'
+                    elif state == 'CAPTURE_LINE_2':
+                        if c == '\n':
+                            yield 'GOTO', capture.rstrip('\n')
+                            capture = ''
+                            state = 'BEGIN_LINE'
+                        elif c not in '0123456789':
+                            state = 'NO_CAPTURE'
+                    elif state == 'CAPTURE_LINE_1':
+                        if c == ' ':
+                            state = 'CAPTURE_LINE_2'
+                        elif c not in '0123456789':
+                            state = 'NO_CAPTURE'
+                    else:
+                        assert False, state
 
     def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int]) -> bool:
-        # self.log('initial range: (%d, %d)' % range_)
         with self.paste_mode_guard():
-            first_line = ''
-            first_line_done = False
             first = True
-            accum = ''
 
             if not self.running:
                 return True
-            for chunk in self.streaming_response(question, instruction):
+            for kind, chunk in self.parse_response(self.streaming_response(question, instruction)):
                 if not self.running:
                     return True
 
-                if not first_line_done:
-                    first_line += chunk
-                    if '\n' in first_line:
-                        first_line_done = True
-                        chunk = first_line.split('\n', maxsplit=1)[1]
-                        result = self.analysis_first_line(first_line, range_)
-                        if result is None:
-                            self.log('null first line: ' + first_line)
-                            return False
-                        range_ = result
-                        if not chunk:
-                            continue
-                    else:
-                        continue
+                if kind == 'DELETE':
+                    self.nvim.command(f'undojoin|normal! dd')
+                    self.nvim.command('redraw')
+                    continue
 
-                if chunk:
+                if kind == 'GOTO':
+                    start, end = chunk.split(' ', maxsplit=1)
+                    range_ = (int(start), int(end))
+                    first = True
+
+                if kind == 'APPEND':
                     if first:
-                        # self.log('final range: (%d, %d)' % range_)
                         if range_[0] < range_[1]:
-                            # self.log(f'normal! {range_[0] + 1}G')
                             self.nvim.command(f'normal! {range_[0] + 1}G')
-                            # self.log('replacing:\n' + '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]]))
                             self.nvim.current.buffer[range_[0]:range_[1]] = ['']
                         else:
                             self.nvim.command(f'normal! {range_[0] + 1}G')
                             self.nvim.command(f'undojoin|normal! O')
                         first = False
 
-                    accum += chunk
-
                     self.nvim.command(f'undojoin|normal! a{chunk}')
                     self.nvim.command('redraw')
-
-                    if accum.strip() == 'DELETE':
-                        self.nvim.command(f'undojoin|normal! dd')
-                        self.nvim.command('redraw')
-                        continue
-
-                    # if accum.endswith('\nMORE\n'):
-                    #     self.nvim.command(f'undojoin|normal! dd')
-                    #     self.nvim.command('redraw')
-                    #     first_line = ''
-                    #     first_line_done = False
-                    #     first = True
-                    #     accum = ''
-                    #     continue
 
             return True
 
@@ -998,13 +1017,14 @@ class GPT4oPlugin:
             result += f'Question: {question}'
         return result
 
-    def get_range_code(self, range_: tuple[int, int]) -> tuple[str, str]:
+    def get_range_code(self, range_: tuple[int, int]) -> tuple[str, str, str]:
         file_type = self.nvim.api.get_option_value('filetype', {'buf': self.nvim.current.buffer.number})
         if range_[0] < range_[1]:
-            code = self.add_line_numbers_suffix(self.nvim.current.buffer[range_[0]:range_[1]])
+            lined_code = self.add_line_numbers_suffix(self.nvim.current.buffer[range_[0]:range_[1]])
+            raw_code = '\n'.join(self.nvim.current.buffer[range_[0]:range_[1]])
         else:
-            code = ''
-        return code, file_type
+            lined_code = raw_code = ''
+        return lined_code, raw_code, file_type
 
     def alert(self, message: str, level: str = 'INFO'):
         self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level})')
@@ -1045,9 +1065,9 @@ class GPT4oPlugin:
         return range_
 
     def do_prompt(self, question: str, range_: tuple[int, int], intent: str):
-        code, file_type = self.get_range_code(range_)
+        lined_code, raw_code, file_type = self.get_range_code(range_)
         question = question = question.strip()
-        files = self.get_referenced_files(code, question)
+        files = self.get_referenced_files(raw_code, question)
 
         intent_was_auto = intent == 'auto'
         if intent_was_auto:
@@ -1057,11 +1077,11 @@ class GPT4oPlugin:
             if intent == 'edit':
                 if not question:
                     question = 'Fix, complete or continue writing.'
-                question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
+                question = f'Edit the following code:\n```{file_type}\n{lined_code}\n```\nPercisely follow the user instruction: {question}'
             elif intent == 'chat':
                 if question:
-                    if code.strip():
-                        question = f'Based on the following code:\n```{file_type}\n{code}\n```\nPercisely answer the user question: {question}'
+                    if raw_code.strip():
+                        question = f'Based on the following code:\n```{file_type}\n{lined_code}\n```\nPercisely answer the user question: {question}'
             else:
                 assert False, intent
 
@@ -1097,11 +1117,11 @@ class GPT4oPlugin:
         original_question = question = question.strip()
         range_ = (range_[0] - 1, range_[1])
         assert range_[0] < range_[1], range_
-        code, file_type = self.get_range_code(range_)
+        lined_code, raw_code, file_type = self.get_range_code(range_)
         if not question:
             question = 'Fix, complete or continue writing.'
-        question = f'Edit the following code:\n```{file_type}\n{code}\n```\nPercisely follow the user instruction: {question}'
-        files = self.get_referenced_files(code, original_question)
+        question = f'Edit the following code:\n```{file_type}\n{lined_code}\n```\nPercisely follow the user instruction: {question}'
+        files = self.get_referenced_files(raw_code, original_question)
         question = self.form_context(question=question, files=files)
         self.alert(question)
 
@@ -1124,8 +1144,6 @@ class GPT4oPlugin:
             range_ = (range_[0] - 1, range_[1])
             assert range_[0] < range_[1], range_
 
-            # if intent == 'intent':
-            #     intent, range_ = self.intent_recognize(question, range_)
             self.do_prompt(question=question, range_=range_, intent=intent)
 
     @neovim.command('GPTChat', nargs='*', range=True)
@@ -1277,6 +1295,33 @@ class TestGPT4oPlugin(unittest.TestCase):
                   '                                                          ─╯'
         content = self.plugin.treat_terminal_p10k(content)
         self.assertEqual(content, '❯ cd -q ../build')
+
+    def test_parse_response(self):
+        result = list(self.plugin.parse_response(['1 2\nhello']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'hello')])
+
+        result = list(self.plugin.parse_response(['1 2\n1 hello']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', '1 hello')])
+
+        result = list(self.plugin.parse_response(['1 2\n1 2 hello']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', '1 2 hello')])
+
+        result = list(self.plugin.parse_response(['1 23\n1 23 hello']))
+        self.assertEqual(result, [('GOTO', '1 23'), ('APPEND', '1 23 hello')])
+
+        result = list(self.plugin.parse_response(['12 3\n12 3 hello']))
+        self.assertEqual(result, [('GOTO', '12 3'), ('APPEND', '12 3 hello')])
+
+        result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello']))
+        self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello')])
+
+        result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello\n']))
+        self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello\n')])
+
+        result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello\n4 5 world 6']))
+        self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello\n'), ('APPEND', '4 5 world 6')])
+
+
 
 if __name__ == '__main__':
     unittest.main()
