@@ -633,15 +633,15 @@ class GPT4oPlugin:
         token_index = 0
         token_word = ''
         last_command = ''
-        for chunk in response:
-            if not chunk:
-                continue
-
+        for chunk in itertools.chain(itertools.filterfalse(lambda x: not x, response), ['']):
             stack.append(chunk)
             while stack:
                 chunk = stack.pop()
 
-                for i, c in enumerate(itertools.chain(chunk, ['', ''])):
+                chunk_iter = chunk
+                if not chunk:
+                    chunk_iter = ['', '']
+                for i, c in enumerate(chunk_iter):
                     if state == 'NO_CAPTURE':
                         chunk = capture + chunk[i:]
                         capture = ''
@@ -716,7 +716,7 @@ class GPT4oPlugin:
                 self.log(repr((kind, chunk)))
                 if kind == 'GOTO':
                     start, end = chunk.split(' ')
-                    range_ = (int(start), int(end))
+                    range_ = (range_[0] + int(start), range_[1] + int(end))
                     first_append_after_goto = True
 
                 elif kind == 'APPEND':
