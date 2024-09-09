@@ -17,6 +17,7 @@ class Timer:
 timer = Timer()
 
 import pathlib
+import itertools
 import traceback
 import subprocess
 import threading
@@ -625,22 +626,6 @@ class GPT4oPlugin:
         finally:
             self.nvim.command('set nopaste')
 
-    def analysis_first_line(self, first_line: str, range_: tuple[int, int]) -> Optional[tuple[int, int]]:
-        if first_line == 'NULL':
-            return None
-
-        line_numbers = first_line.split(' ')
-        if len(line_numbers) != 2:
-            return None
-        try:
-            start, end = int(line_numbers[0]), int(line_numbers[1])
-        except ValueError:
-            return None
-        if start > end:
-            return None
-
-        return start - 1, end
-
     def parse_response(self, response: Iterable[str]) -> Iterable[tuple[str, str]]:
         state = 'BEGIN_LINE'
         capture = ''
@@ -656,7 +641,7 @@ class GPT4oPlugin:
             while stack:
                 chunk = stack.pop()
 
-                for i, c in enumerate(chunk):
+                for i, c in enumerate(itertools.chain(chunk, ['', ''])):
                     if state == 'NO_CAPTURE':
                         chunk = capture + chunk[i:]
                         capture = ''
@@ -673,6 +658,7 @@ class GPT4oPlugin:
                             suffix = chunk[index + 1:]
                             if suffix:
                                 stack.append(suffix)
+                            state = 'BEGIN_LINE'
                         break
 
                     capture += c
@@ -690,7 +676,7 @@ class GPT4oPlugin:
                         else:
                             state = 'NO_CAPTURE'
                     elif state == 'CAPTURE_LINE_2':
-                        if c == '\n':
+                        if c == '\n' or c == '':
                             yield 'GOTO', capture.rstrip('\n')
                             last_command = 'GOTO'
                             capture = ''
@@ -707,52 +693,58 @@ class GPT4oPlugin:
                             token_index += 1
                             if token_index == len(token_word):
                                 state = 'CAPTURE_TOKEN_END'
+                        else:
+                            state = 'NO_CAPTURE'
                     elif state == 'CAPTURE_TOKEN_END':
-                        if c == '\n':
+                        if c == '\n' or c == '':
                             yield token_word, ''
+                            token_word = ''
+                            token_index = 0
                             capture = ''
+                            state = 'BEGIN_LINE'
                         else:
                             state = 'NO_CAPTURE'
                     else:
                         assert False, state
 
-        if state == 'CAPTURE_TOKEN_END':
-            yield token_word, ''
-
     def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int]) -> bool:
         with self.paste_mode_guard():
-            first = True
+            any_append_or_delete = False
+            first_append_after_goto = True
 
-            if not self.running:
-                return True
             for kind, chunk in self.parse_response(self.streaming_response(question, instruction)):
-                if not self.running:
-                    return True
-
-                if kind == 'DELETE':
-                    self.nvim.command(f'undojoin|normal! dd')
-                    self.nvim.command('redraw')
-                    continue
-
+                self.log(repr((kind, chunk)))
                 if kind == 'GOTO':
-                    start, end = chunk.split(' ', maxsplit=1)
+                    start, end = chunk.split(' ')
                     range_ = (int(start), int(end))
-                    first = True
+                    first_append_after_goto = True
 
-                if kind == 'APPEND':
-                    if first:
+                elif kind == 'APPEND':
+                    if first_append_after_goto:
                         if range_[0] < range_[1]:
                             self.nvim.command(f'normal! {range_[0] + 1}G')
                             self.nvim.current.buffer[range_[0]:range_[1]] = ['']
                         else:
                             self.nvim.command(f'normal! {range_[0] + 1}G')
                             self.nvim.command(f'undojoin|normal! O')
-                        first = False
+                        first_append_after_goto = False
 
                     self.nvim.command(f'undojoin|normal! a{chunk}')
                     self.nvim.command('redraw')
+                    any_append_or_delete = True
 
-            return True
+                elif kind == 'DELETE':
+                    self.nvim.command(f'undojoin|normal! dd')
+                    self.nvim.command('redraw')
+                    any_append_or_delete = True
+
+                elif kind == 'NULL':
+                    any_append_or_delete = False
+
+                else:
+                    assert False, kind
+
+            return any_append_or_delete
 
     def buffer_slice(self, range_: tuple[int, int]) -> str:
         start, end = range_
@@ -1336,43 +1328,63 @@ class TestGPT4oPlugin(unittest.TestCase):
 
         result = list(self.plugin.parse_response(['1 2\n1 hello']))
         self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', '1 hello')])
-
+        
         result = list(self.plugin.parse_response(['1 2\n1 2 hello']))
         self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', '1 2 hello')])
-
+        
         result = list(self.plugin.parse_response(['1 23\n1 23 hello']))
         self.assertEqual(result, [('GOTO', '1 23'), ('APPEND', '1 23 hello')])
-
+        
         result = list(self.plugin.parse_response(['12 3\n12 3 hello']))
         self.assertEqual(result, [('GOTO', '12 3'), ('APPEND', '12 3 hello')])
-
+        
         result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello']))
         self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello')])
-
+        
         result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello\n']))
         self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello\n')])
-
+        
         result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello\n4 5 world 6']))
         self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello\n'), ('APPEND', '4 5 world 6')])
-
+        
         result = list(self.plugin.parse_response(['1 23\nDELETE']))
         self.assertEqual(result, [('GOTO', '1 23'), ('DELETE', '')])
-
+        
         result = list(self.plugin.parse_response(['1 2 3\nDELETE']))
         self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', 'DELETE')])
-
+        
+        result = list(self.plugin.parse_response(['1 2\nDELETe']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'DELETe')])
+        
+        result = list(self.plugin.parse_response(['1 2\nDELET']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'DELET')])
+        
         result = list(self.plugin.parse_response(['1 2 3\nNULL']))
         self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', 'NULL')])
-
+        
         result = list(self.plugin.parse_response(['1 2\nNULL']))
         self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'NULL')])
-
+        
         result = list(self.plugin.parse_response(['NULL']))
         self.assertEqual(result, [('NULL', '')])
-
+        
+        result = list(self.plugin.parse_response(['NULl']))
+        self.assertEqual(result, [('APPEND', 'NULl')])
+        
+        result = list(self.plugin.parse_response(['NUL']))
+        self.assertEqual(result, [('APPEND', 'NUL')])
+        
         result = list(self.plugin.parse_response(['DELETE']))
         self.assertEqual(result, [('APPEND', 'DELETE')])
 
+        result = list(self.plugin.parse_response(['1 2\nhello\n3 4\nworld']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'hello\n'), ('GOTO', '3 4'), ('APPEND', 'world')])
+
+        result = list(self.plugin.parse_response(['1 2\nhello\n3 4 5\nworld']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'hello\n'), ('APPEND', '3 4 5\n'), ('APPEND', 'world')])
+
+        result = list(self.plugin.parse_response(['1 2\nhello\n3 4\nDELETE']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'hello\n'), ('GOTO', '3 4'), ('DELETE', '')])
 
 
 if __name__ == '__main__':
