@@ -641,10 +641,13 @@ class GPT4oPlugin:
 
         return start - 1, end
 
-    @staticmethod
-    def parse_response(response: Iterable[str]) -> Iterable[tuple[str, str]]:
+    def parse_response(self, response: Iterable[str]) -> Iterable[tuple[str, str]]:
         state = 'BEGIN_LINE'
+        capture = ''
         stack = []
+        token_index = 0
+        token_word = ''
+        last_command = ''
         for chunk in response:
             if not chunk:
                 continue
@@ -653,29 +656,43 @@ class GPT4oPlugin:
             while stack:
                 chunk = stack.pop()
 
-                capture = ''
                 for i, c in enumerate(chunk):
                     if state == 'NO_CAPTURE':
                         chunk = capture + chunk[i:]
+                        capture = ''
                         index = chunk.find('\n')
                         if index == -1:
-                            yield 'APPEND', chunk
+                            if chunk:
+                                yield 'APPEND', chunk
+                                last_command = 'APPEND'
                         else:
-                            yield 'APPEND', chunk[:index + 1]
-                            rest = chunk[index + 1:]
-                            if rest:
-                                stack.append(rest)
+                            prefix = chunk[:index + 1]
+                            if prefix:
+                                yield 'APPEND', prefix
+                                last_command = 'APPEND'
+                            suffix = chunk[index + 1:]
+                            if suffix:
+                                stack.append(suffix)
                         break
 
                     capture += c
                     if state == 'BEGIN_LINE':
                         if c in '0123456789':
                             state = 'CAPTURE_LINE_1'
+                        elif c == 'D' and last_command == 'GOTO':
+                            state = 'CAPTURE_TOKEN'
+                            token_word = 'DELETE'
+                            token_index = 1
+                        elif c == 'N' and last_command == '':
+                            state = 'CAPTURE_TOKEN'
+                            token_word = 'NULL'
+                            token_index = 1
                         else:
                             state = 'NO_CAPTURE'
                     elif state == 'CAPTURE_LINE_2':
                         if c == '\n':
                             yield 'GOTO', capture.rstrip('\n')
+                            last_command = 'GOTO'
                             capture = ''
                             state = 'BEGIN_LINE'
                         elif c not in '0123456789':
@@ -685,8 +702,22 @@ class GPT4oPlugin:
                             state = 'CAPTURE_LINE_2'
                         elif c not in '0123456789':
                             state = 'NO_CAPTURE'
+                    elif state == 'CAPTURE_TOKEN':
+                        if c == token_word[token_index]:
+                            token_index += 1
+                            if token_index == len(token_word):
+                                state = 'CAPTURE_TOKEN_END'
+                    elif state == 'CAPTURE_TOKEN_END':
+                        if c == '\n':
+                            yield token_word, ''
+                            capture = ''
+                        else:
+                            state = 'NO_CAPTURE'
                     else:
                         assert False, state
+
+        if state == 'CAPTURE_TOKEN_END':
+            yield token_word, ''
 
     def streaming_insert(self, question: str, instruction: str, range_: tuple[int, int]) -> bool:
         with self.paste_mode_guard():
@@ -1300,6 +1331,9 @@ class TestGPT4oPlugin(unittest.TestCase):
         result = list(self.plugin.parse_response(['1 2\nhello']))
         self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'hello')])
 
+        result = list(self.plugin.parse_response(['1 -2\nhello']))
+        self.assertEqual(result, [('APPEND', '1 -2\n'), ('APPEND', 'hello')])
+
         result = list(self.plugin.parse_response(['1 2\n1 hello']))
         self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', '1 hello')])
 
@@ -1320,6 +1354,24 @@ class TestGPT4oPlugin(unittest.TestCase):
 
         result = list(self.plugin.parse_response(['1 2 3\n1 2 3 hello\n4 5 world 6']))
         self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', '1 2 3 hello\n'), ('APPEND', '4 5 world 6')])
+
+        result = list(self.plugin.parse_response(['1 23\nDELETE']))
+        self.assertEqual(result, [('GOTO', '1 23'), ('DELETE', '')])
+
+        result = list(self.plugin.parse_response(['1 2 3\nDELETE']))
+        self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', 'DELETE')])
+
+        result = list(self.plugin.parse_response(['1 2 3\nNULL']))
+        self.assertEqual(result, [('APPEND', '1 2 3\n'), ('APPEND', 'NULL')])
+
+        result = list(self.plugin.parse_response(['1 2\nNULL']))
+        self.assertEqual(result, [('GOTO', '1 2'), ('APPEND', 'NULL')])
+
+        result = list(self.plugin.parse_response(['NULL']))
+        self.assertEqual(result, [('NULL', '')])
+
+        result = list(self.plugin.parse_response(['DELETE']))
+        self.assertEqual(result, [('APPEND', 'DELETE')])
 
 
 
