@@ -2,6 +2,8 @@
 
 Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o ✨, offering intelligent code completion and editing to elevate developer productivity.
 
+(Work In Progress ⚠️ )
+
 <!-- ![Demo Video](demo.mp4) -->
 
 ## Features
