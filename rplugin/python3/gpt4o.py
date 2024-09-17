@@ -92,19 +92,22 @@ INSTRUCTION_EDIT = '''You are a code modification assistant. Your task is to mod
 
 **Rules:**
 
-1. The first line contains two numbers separated by a space: the start and end line numbers of the lines to edit (inclusive). Line numbers start from 1.
-2. Your output must only include the modified code within the specified range, with no extra text or explanations.
-3. To delete a range of code, output "DELETE" after the line numbers.
-4. Code outside the specified range should not be included in the output.
-5. The first character of your response (excluding line numbers) must match the first character of the modified range of code. The last character must match the last character of the modified range.
-6. Minimize the range of lines to be edited while ensuring the modifications are clear and human-readable.
-7. Do not use any markdown formatting, code block indicators, or syntax highlighting.
-8. Present the code exactly as it would appear in a plain text editor, preserving all whitespace, indentation, and line breaks.
-9. Ensure the modified code is syntactically and semantically correct for the programming language.
-10. Follow consistent indentation and style guidelines relevant to the code base.
-11. Respond with "NULL" if the user's request cannot be reflected into any code change.
-12. Ignore line markers like '\t// 1' in the input code; do not include them in your output.
-13. For multiple ranges to edit, output each range and the modified code separately.
+1. The first line contains two numbers separated by a space: the start line number and end line number of the lines to edit.
+2. Make sure the line numbers matches the input code. Both sides of the range are inclusive.
+3. Your output must only include the modified code within the specified range, with no extra text or explanations.
+4. Code outside of the selected range should not be included in the output.
+5. The first character of your response after line numbers must match the first character of the modified range of code.
+6. The last character must match the last character of the modified range.
+7. To insert into a line of code, output the end line number one less than the start line number.
+8. To delete a range of code, output "DELETE" after the line numbers.
+9. Minimize the range of lines to be edited while ensuring the modifications are clear and human-readable.
+10. Do not use any markdown formatting, code block indicators, or syntax highlighting.
+11. Present the code exactly as it would appear in a plain text editor, preserving all whitespace, indentation, and line breaks.
+12. Ensure the modified code is syntactically and semantically correct for the programming language.
+13. Follow consistent indentation and style guidelines relevant to the code base.
+14. Respond with "NULL" if the user's request cannot be reflected into any code change.
+15. Ignore line markers like '\t// 1' in the input code, do not include them in your output.
+16. If there are multiple ranges to edit, you must output each range and the modified code separately.
 
 **Important:** Your response must never include any formatting characters. Only the first line may contain two line numbers; the rest of the lines must not include line numbers.
 
@@ -213,7 +216,24 @@ Instructions: Replace `system("pause")` with `getch` from `<conio.h>`. And remov
 5 5
 DELETE
 7 7
-    getch();'''
+    getch();
+
+**Example Input 6:**
+
+Edit the following code:
+```cpp
+#include <cstdlib>\t// 1
+\t// 2
+int main() {\t// 3
+    std::cout << "Hello, world\\n";\t// 4
+    return 0;\t// 5
+}\t// 6
+```
+Instructions: Add the missing `#include <iostream>`.
+
+**Example Output 5:**
+2 1
+#include <iostream>'''
 
 INSTRUCTION_CHAT = '''You are an AI programming assistant.
 Follow the user's requirements carefully & to the letter.
@@ -716,7 +736,7 @@ class GPT4oPlugin:
             goto_history = {}
 
             for kind, chunk in self.parse_response(self.streaming_response(question, instruction)):
-                self.log(repr((kind, chunk)))
+                # self.log(repr((kind, chunk)))
                 if kind == 'GOTO':
                     start, end = chunk.split(' ')
                     goto_range = (range_[0] + int(start) - 1, range_[0] + int(end))

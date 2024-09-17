@@ -7,7 +7,7 @@ def fibonacci(n):
         return fibonacci(n-1) + fibonacci(n-2)
 
 
-class TestFibFunction(unittest.TestCase):
+class TestFibonacciFunction(unittest.TestCase):
     def test_fib(self):
         self.assertEqual(fibonacci(0), 0)
         self.assertEqual(fibonacci(1), 1)
