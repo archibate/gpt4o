@@ -55,3 +55,8 @@ Fix, complete or continue writing.
 ENSURE_JSON_COMPATIBLE = r'''
 Ensure the output JSON is raw and compatible, without any triple quotes or additional formatting. Do not explain.
 '''.strip()
+
+FORCE_JSON_OK_WHITELIST = [
+    'api.openai.com',
+    'api.deepseek.com',
+]
