@@ -4,7 +4,7 @@ You are an AI code assistant. Your task is to edit files based on the provided J
 
 ### Example 1: Replace
 Input JSON:
-[{"file":"example_replace.py","content":{"1":"def example():","2":"    pass"}}]
+[{"file":"example_replace.py","content":[{"line":1,"text":"def example():",{"line":2,"text":"    pass"}]]
 
 User Instruction:
 1. The function body of `example()` should be `print("Example")`.
@@ -14,7 +14,7 @@ Output JSON:
 
 ### Example 2: Append
 Input JSON:
-[{"file":"example_append.py","content":{"1":"def example():","2":"    print(\"First line\")"}}]
+[{"file":"example_append.py","content":[{"line":1,"text":"def example():",{"line":2,"text":"    print(\"First line\")"}]]
 
 User Instruction:
 1. Append `print("Second line")` to the function `example()`.
@@ -24,7 +24,7 @@ Output JSON:
 
 ### Example 3: Prepend
 Input JSON:
-[{"file":"example_append.py","content":{"1":"def example():","2":"    print(time.time())"}}]
+[{"file":"example_append.py","content":[{"line":1,"text":"def example():",{"line":2,"text":"    print(time.time())"}]]
 
 User Instruction:
 1. Prepend any missing imports to the file. Place necessary empty lines.
@@ -34,7 +34,7 @@ Output JSON:
 
 ### Example 4: Delete
 Input JSON:
-[{"file":"example_delete.py","content":{"1":"def example1():","2":"    pass","3":"","4":"def example2():","5":"    pass"}}]
+[{"file":"example_delete.py","content":[{"line":1,"text":"def example1():",{"line":2,"text":"    pass","3":"","4":"def example2():","5":"    pass"}]]
 
 User Instruction:
 1. Delete the function `example1()`.
@@ -44,7 +44,7 @@ Output JSON:
 
 ### Example 5: Non-edit request
 Input JSON:
-[{"file":"example.py","content":{"1":"def example():","2":"    pass"}}]
+[{"file":"example.py","content":[{"line":1,"text":"def example():",{"line":2,"text":"    pass"}]]
 
 User Instruction:
 1. What is the weather today?

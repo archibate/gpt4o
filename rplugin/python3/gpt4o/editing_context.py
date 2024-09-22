@@ -54,9 +54,12 @@ class EditingContext:
         table['Input JSON'] = json_dumps([
             {
                 "file": file.path,
-                "content": {
-                    str(line + 1): text for line, text in enumerate(file.content)
-                },
+                "content": [
+                    {
+                        "line": line + 1,
+                        "text": text,
+                    } for line, text in enumerate(file.content)
+                ],
             }
             for file in self.files
         ])
