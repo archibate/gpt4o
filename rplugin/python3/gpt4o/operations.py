@@ -16,8 +16,8 @@ class OperationDelete:
     line_end: int
 
 @dataclass
-class OperationInsert:
-    line_start: int
+class OperationAppend:
+    line: int
     content: list[str]
 
 @dataclass
@@ -27,6 +27,6 @@ class OperationNop:
 OPERATIONS: dict[str, Type] = dict(
     replace=OperationReplace,
     delete=OperationDelete,
-    insert=OperationInsert,
+    append=OperationAppend,
     nop=OperationNop,
 )

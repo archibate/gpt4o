@@ -22,15 +22,15 @@ Request Changes:
 Output JSON:
 {"operation":"delete","file":"example_delete.py","line_start":2,"line_end":2}
 
-### Example 3: Insert
+### Example 3: Append
 Input JSON:
-[{"file":"example_insert.py","content":{"1":"def example():","2":"    print(\"Existing line\")"}}]
+[{"file":"example_append.py","content":{"1":"def example():","2":"    print(\"First line\")"}}]
 
 Request Changes:
-1. Insert `print("Inserted line")` before line 2 in `example_insert.py`.
+1. Append `print("Second line")` after line 2 in `example_insert.py`.
 
 Output JSON:
-{"operation":"insert","file":"example_insert.py","line_start":2,"content":["    print(\"Inserted line\")"]}
+{"operation":"append","file":"example_append.py","line":2,"content":["    print(\"Second line\")"]}
 
 ### Example 4: Not a Change Request
 Input JSON:
