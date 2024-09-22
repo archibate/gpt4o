@@ -13,6 +13,14 @@ class Cursor:
     col: int
 
 @dataclass
+class Diagnostic:
+    type: str
+    message: str
+    line: int
+    col: int
+    code: str
+
+@dataclass
 class Prompt:
     instruction: str
     question: str

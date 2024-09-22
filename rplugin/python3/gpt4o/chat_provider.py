@@ -63,7 +63,7 @@ class ChatProvider(ABC):
     def query_prompt(self, prompt: Prompt,
                      *,
                      force_json: bool = False,
-                     seed: int | None = None,
+                     seed: Optional[int] = None,
                      ) -> Iterable[str]:
         pass
 

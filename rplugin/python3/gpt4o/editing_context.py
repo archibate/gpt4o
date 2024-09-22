@@ -1,8 +1,8 @@
 import unittest
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List
 
-from gpt4o.types import File, Cursor, Prompt
+from gpt4o.types import File, Cursor, Prompt, Diagnostic
 from gpt4o.utils import json_dumps
 from gpt4o.resources import INSTRUCTIONS, DEFAULT_CHANGE_REQUEST
 
@@ -10,7 +10,7 @@ class TestEditingContext(unittest.TestCase):
     def test_compose_files(self):
         files = [File(path='hello.py', content=['def main():', '    pass'])]
         cursor = Cursor(path='hello.py', line=2, col=5)
-        context = EditingContext(files=files, cursor=cursor)
+        context = EditingContext(files=files, cursor=cursor, diagnostics=[])
         composed = context.compose_prompt('Implement the `main` function.')
         self.assertEqual(composed.instruction, INSTRUCTIONS.FILE_EDIT)
         self.assertEqual(composed.question, r'''
@@ -30,6 +30,7 @@ Output the changes in the specified JSON format.
 class EditingContext:
     files: List[File]
     cursor: Cursor
+    diagnostics: List[Diagnostic]
 
     @classmethod
     def __polish_change_request(cls, change: str) -> str:
@@ -41,24 +42,41 @@ class EditingContext:
     def compose_prompt(self, change: str) -> Prompt:
         change = self.__polish_change_request(change)
 
-        files = [
-            {"file": file.path, "content": {str(line + 1): text for line, text in enumerate(file.content)}}
-            for file in self.files
-        ]
-        cursor = {
+        table: Dict[str, str] = {}
+
+        table['Current Cursor'] = json_dumps({
             "file": self.cursor.path,
             "line": self.cursor.line,
             "col": self.cursor.col,
-        }
-        question = rf'''
-Input JSON:
-{json_dumps(files)}
+        })
 
-Request Changes:
-{change}
+        table['Input JSON'] = json_dumps([
+            {
+                "file": file.path,
+                "content": {
+                    str(line + 1): text for line, text in enumerate(file.content)
+                },
+            }
+            for file in self.files
+        ])
 
-Output the changes in the specified JSON format.
-        '''.strip()
+        if self.diagnostics:
+            table['Diagnostics'] = json_dumps([
+                {
+                    "type": diag.type,
+                    "message": diag.message,
+                    "line": diag.line,
+                    "col": diag.col,
+                    "code": diag.code,
+                }
+                for diag in self.diagnostics
+            ])
+
+        table['Request Changes'] = change
+
+        question = ''.join(f'{key}:\n{value}\n\n' for key, value in table.items())
+        question += 'Output the changes in the specified JSON format.'
+
         return Prompt(instruction=INSTRUCTIONS.FILE_EDIT,
                       question=question)
 

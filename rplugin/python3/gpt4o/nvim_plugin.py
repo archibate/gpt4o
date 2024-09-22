@@ -7,9 +7,9 @@ from gpt4o.context_simplifier import ContextSimplifier
 from gpt4o.chat_provider import ChatProviderOpenAI
 from gpt4o.embed_provider import EmbedProviderFastEmbed
 from gpt4o.response_parser import ResponseParser
-from gpt4o.types import File, Cursor, Prompt
+from gpt4o.types import Diagnostic, File, Cursor, Prompt
 from gpt4o.operations import OperationVisitor
-from gpt4o.resources import NVIM_FILE_TYPE_MAPS
+from gpt4o.utils import json_dumps, json_loads
 
 @neovim.plugin
 class NvimPlugin:
@@ -20,7 +20,7 @@ class NvimPlugin:
         self.context_simplifier = ContextSimplifier(self.embed_provider)
         self.response_parser = ResponseParser()
 
-    def alert(self, message: str | Any, level: str | None = None):
+    def alert(self, message: str | Any, level: str = 'Normal'):
         if not isinstance(message, str):
             message = repr(message)
         self.log(f'{level}: {message}')
@@ -58,8 +58,28 @@ class NvimPlugin:
             content.pop(-1)
         return content
 
+    def get_diagnostics(self) -> List[Diagnostic]:
+        diagnostics = json_loads(self.nvim.call('luaeval', 'vim.fn.json_encode(vim.lsp.diagnostic.get_line_diagnostics())'))
+        result = []
+        for diag in diagnostics:
+            line = diag['range']['start']['line'] + 1
+            col = diag['range']['start']['character'] + 1
+            code = self.nvim.current.buffer[line - 1:line]
+            code = '\n'.join(code)
+            message = diag['message']
+            type = ['error', 'warning', 'info', 'hint'][diag['severity'] - 1]
+            result.append(Diagnostic(
+                type=type,
+                message=message,
+                line=line,
+                col=col,
+                code=code,
+            ))
+        return result
+
     def get_files(self) -> List[File]:
         files: List[File] = []
+        a = 1
         for buffer in self.nvim.buffers:
             buftype = buffer.options['buftype']
             if buftype == 'nofile':
@@ -84,7 +104,8 @@ class NvimPlugin:
     def compose_prompt(self, question: str) -> Prompt:
         files = self.get_files()
         cursor = self.get_cursor()
-        context = EditingContext(files=files, cursor=cursor)
+        diagnostics = self.get_diagnostics()
+        context = EditingContext(files=files, cursor=cursor, diagnostics=diagnostics)
         self.log(f'all files: {[file.path for file in files]}')
         self.context_simplifier.simplify(context)
         self.log(f'files after simplify: {[file.path for file in files]}')
