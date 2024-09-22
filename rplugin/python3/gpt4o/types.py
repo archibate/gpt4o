@@ -15,3 +15,4 @@ class Cursor:
 class Prompt:
     instruction: str
     question: str
+    force_json: bool = False

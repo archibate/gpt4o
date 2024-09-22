@@ -16,7 +16,6 @@ class Timer:
 
 timer = Timer()
 
-import json
 import pathlib
 import itertools
 import traceback

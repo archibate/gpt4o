@@ -22,22 +22,22 @@ class TestResponseParser(unittest.TestCase):
         self.parser = ResponseParser()
 
     def test_parse_replace(self):
-        response = r'{"operation":"replace","path":"hello.py","line_start":3,"line_end":4,"content":["hello","world"]}'
+        response = r'{"operation":"replace","file":"hello.py","line_start":3,"line_end":4,"content":["hello","world"]}'
         operation = self.parser.parse_response([response])
         self.assertEqual(operation, OPERATIONS['replace'](
-            path='hello.py', line_start=3, line_end=4, content=['hello', 'world']))
+            file='hello.py', line_start=3, line_end=4, content=['hello', 'world']))
 
     def test_parse_delete(self):
-        response = r'{"operation":"delete","path":"hello.py","line_start":3,"line_end":4}'
+        response = r'{"operation":"delete","file":"hello.py","line_start":3,"line_end":4}'
         operation = self.parser.parse_response([response])
         self.assertEqual(operation, OPERATIONS['delete'](
-            path='hello.py', line_start=3, line_end=4))
+            file='hello.py', line_start=3, line_end=4))
 
     def test_parse_append(self):
-        response = r'{"operation":"append","path":"hello.py","line":3,"content":"hello"}'
+        response = r'{"operation":"append","file":"hello.py","line":3,"content":"hello"}'
         operation = self.parser.parse_response([response])
         self.assertEqual(operation, OPERATIONS['append'](
-            path='hello.py', line=3, content='hello'))
+            file='hello.py', line=3, content='hello'))
                 
 if __name__ == '__main__':
     unittest.main()

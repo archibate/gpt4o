@@ -19,7 +19,7 @@ class NvimPlugin:
         # TODO: use NVIM_PYTHON_LOG_FILE instead?
         if not isinstance(message, str):
             message = repr(message)
-        self.nvim.command(f'lua vim.notify and vim.notify({repr(message)}, vim.log.levels.{level.upper()})')
+        self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level.upper()})')
 
     def get_buffer_path(self, buffer: neovim.api.Buffer) -> str:
         buftype = buffer.options['buftype']
@@ -27,7 +27,10 @@ class NvimPlugin:
             return f'[{NVIM_BUF_TYPE_MAPS.get(buftype, buftype).capitalize()}]'
         if not buffer.name:
             return '[No name]'
-        return buffer.name
+        path = buffer.name
+        cwd = self.nvim.call('getcwd') + '/'
+        path = path.removeprefix(cwd)
+        return path
 
     def find_buffer_by_path(self, path: str) -> neovim.api.Buffer:
         for buffer in self.nvim.buffers:
@@ -56,6 +59,15 @@ class NvimPlugin:
         prompt = context.compose_prompt(question)
         return prompt
 
+    @neovim.command('GPTInfo', nargs='*', range=True)
+    def on_GPTInfo(self, args: list[str], range: tuple[int, int]):
+        question = ' '.join(args)
+        _ = range
+
+        prompt = self.compose_prompt(question)
+        # self.alert(f'{prompt.instruction}\n{prompt.question}', 'INFO')
+        self.alert(prompt.question, 'INFO')
+
     @neovim.command('GPTEdit', nargs='*', range=True)
     def on_GPTEdit(self, args: list[str], range: tuple[int, int]):
         question = ' '.join(args)
@@ -74,15 +86,15 @@ class NvimOperationVisitor(OperationVisitor):
     parent: NvimPlugin
 
     def visit_replace(self, op):
-        buffer = self.parent.find_buffer_by_path(op.path)
+        buffer = self.parent.find_buffer_by_path(op.file)
         buffer[op.line_start:op.line_end + 1] = op.content
 
     def visit_delete(self, op):
-        buffer = self.parent.find_buffer_by_path(op.path)
+        buffer = self.parent.find_buffer_by_path(op.file)
         buffer[op.line_start:op.line_end + 1] = []
 
     def visit_append(self, op):
-        buffer = self.parent.find_buffer_by_path(op.path)
+        buffer = self.parent.find_buffer_by_path(op.file)
         buffer[op.line:op.line] = op.content
 
     def visit_nop(self, op):

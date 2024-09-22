@@ -51,3 +51,7 @@ NVIM_BUF_TYPE_MAPS = {
 DEFAULT_CHANGE_REQUEST = r'''
 Fix, complete or continue writing.
 '''.strip()
+
+ENSURE_JSON_COMPATIBLE = r'''
+Ensure the output JSON is raw and compatible, without any triple quotes or additional formatting. Do not explain.
+'''.strip()

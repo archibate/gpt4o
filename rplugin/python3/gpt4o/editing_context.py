@@ -22,7 +22,7 @@ Current Cursor:
 Request Changes:
 1. Implement the `main` function.
 
-Output the changes in the specified JSON format. Ensure the output JSON is raw and compatible, without any triple quotes or additional formatting. Do not explain.
+Output the changes in the specified JSON format.
                          '''.strip())
 
 @dataclass
@@ -59,7 +59,7 @@ Current Cursor:
 Request Changes:
 {change}
 
-Output the changes in the specified JSON format. Ensure the output JSON is raw and compatible, without any triple quotes or additional formatting. Do not explain.
+Output the changes in the specified JSON format.
         '''.strip()
         return Prompt(instruction=INSTRUCTIONS.FILE_EDIT,
                       question=question)
