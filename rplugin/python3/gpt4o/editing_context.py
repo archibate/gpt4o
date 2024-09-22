@@ -1,8 +1,9 @@
 import unittest
+from dataclasses import dataclass
+
 from gpt4o.types import File, CursorPos, Prompt
 from gpt4o.utils import json_dumps
 from gpt4o.resources import INSTRUCTIONS
-from dataclasses import dataclass
 
 class TestEditingContext(unittest.TestCase):
     def test_compose_files(self):
