@@ -37,12 +37,6 @@ class TestResponseParser(unittest.TestCase):
         response = r'{"operation":"append","line":3,"content":"hello"}'
         operation = self.parser.parse_response([response])
         self.assertEqual(operation, OPERATIONS['append'](line=3, content='hello'))
-
-    # def test_parse_move(self):
-    #     response = r'{"operation":"move","line_start":3,"line_end":4,"new_line":5}'
-    #     operation = self.parser.parse_response([response])
-    #     self.assertEqual(operation, OPERATIONS['move'](
-    #         line_start=3, line_end=4, new_line=5))
                 
 if __name__ == '__main__':
     unittest.main()

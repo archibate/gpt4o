@@ -1,28 +1,41 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Type
 
-class Operation:
-    pass
+class Operation(ABC):
+    @abstractmethod
+    def accept(self, visitor: 'OperationVisitor'):
+        pass
 
 @dataclass
-class OperationReplace:
+class OperationReplace(Operation):
     line_start: int
     line_end: int
     content: list[str]
 
+    def accept(self, visitor: 'OperationVisitor'):
+        visitor.visit_replace(self)
+
 @dataclass
-class OperationDelete:
+class OperationDelete(Operation):
     line_start: int
     line_end: int
 
+    def accept(self, visitor: 'OperationVisitor'):
+        visitor.visit_delete(self)
+
 @dataclass
-class OperationAppend:
+class OperationAppend(Operation):
     line: int
     content: list[str]
 
+    def accept(self, visitor: 'OperationVisitor'):
+        visitor.visit_append(self)
+
 @dataclass
-class OperationNop:
-    pass
+class OperationNop(Operation):
+    def accept(self, visitor: 'OperationVisitor'):
+        visitor.visit_nop(self)
 
 OPERATIONS: dict[str, Type] = dict(
     replace=OperationReplace,
@@ -30,3 +43,20 @@ OPERATIONS: dict[str, Type] = dict(
     append=OperationAppend,
     nop=OperationNop,
 )
+
+class OperationVisitor(ABC):
+    @abstractmethod
+    def visit_replace(self, op: OperationReplace):
+        pass
+
+    @abstractmethod
+    def visit_delete(self, op: OperationDelete):
+        pass
+
+    @abstractmethod
+    def visit_append(self, op: OperationAppend):
+        pass
+
+    @abstractmethod
+    def visit_nop(self, op: OperationNop):
+        pass

@@ -1,25 +1,35 @@
+from abc import ABC, abstractmethod
 import unittest
 from typing import Iterable
 
 from gpt4o.types import Prompt
 from gpt4o.utils import json_loads
 
-class TestPromptQuerier(unittest.TestCase):
+class TestChatProvider(unittest.TestCase):
     def setUp(self):
-        self.querier = PromptQuerier()
+        self.provider: ChatProvider = ChatProviderOpenAI()
 
     def test_query_prompt(self):
         prompt = Prompt(instruction='', question='Hello?')
-        answer = ''.join(self.querier.query_prompt(prompt, seed=42))
+        answer = ''.join(self.provider.query_prompt(prompt, seed=42))
         self.assertEqual(answer, r'Hello! How can I assist you today?')
 
     def test_query_prompt_json(self):
         prompt = Prompt(instruction='', question='List three bullet points of Python. Output in JSON format.')
-        answer = ''.join(self.querier.query_prompt(prompt, force_json=True, seed=42))
+        answer = ''.join(self.provider.query_prompt(prompt, force_json=True, seed=42))
         answer = json_loads(answer)
         self.assertTrue(isinstance(answer, dict) or isinstance(answer, list))
 
-class PromptQuerier:
+class ChatProvider(ABC):
+    @abstractmethod
+    def query_prompt(self, prompt: Prompt,
+                     *,
+                     force_json: bool = False,
+                     seed: int | None = None,
+                     ) -> Iterable[str]:
+        raise NotImplementedError
+
+class ChatProviderOpenAI(ChatProvider):
     def __init__(self):
         import openai
 

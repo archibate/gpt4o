@@ -6,10 +6,10 @@ class File:
     content: list[str]
 
 @dataclass
-class CursorPos:
+class Cursor:
     path: str
     line: int
-    column: int
+    col: int
 
 @dataclass
 class Prompt:

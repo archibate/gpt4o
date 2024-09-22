@@ -1,14 +1,14 @@
 import unittest
 from dataclasses import dataclass
 
-from gpt4o.types import File, CursorPos, Prompt
+from gpt4o.types import File, Cursor, Prompt
 from gpt4o.utils import json_dumps
 from gpt4o.resources import INSTRUCTIONS
 
 class TestEditingContext(unittest.TestCase):
     def test_compose_files(self):
         files = [File(path='hello.py', content=['def main():', '    pass'])]
-        cursor = CursorPos(path='hello.py', line=2, column=5)
+        cursor = Cursor(path='hello.py', line=2, col=5)
         context = EditingContext(files=files, cursor=cursor)
         composed = context.compose_prompt('Implement the `main` function.')
         self.assertEqual(composed.instruction, INSTRUCTIONS.FILE_EDIT)
@@ -28,7 +28,7 @@ Output the changes in the specified JSON format. Ensure the output JSON is raw a
 @dataclass
 class EditingContext:
     files: list[File]
-    cursor: CursorPos
+    cursor: Cursor
 
     def compose_prompt(self, change: str) -> Prompt:
         files = [
@@ -38,7 +38,7 @@ class EditingContext:
         cursor = {
             "file": self.cursor.path,
             "line": self.cursor.line,
-            "col": self.cursor.column,
+            "col": self.cursor.col,
         }
         question = rf'''
 Input JSON:
