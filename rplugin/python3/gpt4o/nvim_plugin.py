@@ -126,11 +126,12 @@ class NvimPlugin:
         _ = range
 
         prompt = self.compose_prompt(question)
-        response = self.chat_provider.query_prompt(prompt, force_json=True, seed=42)
         self.log(prompt.question)
+        response = self.chat_provider.query_prompt(prompt, force_json=True, seed=42)
+        response = ''.join(response)
+        self.log(response)
 
         operation = self.response_parser.parse_response(response)
-        self.log(operation)
 
         visitor = NvimOperationVisitor(self)
         operation.accept(visitor)
@@ -155,4 +156,4 @@ class NvimOperationVisitor(OperationVisitor):
 
     def visit_nop(self, op):
         _ = op
-        self.parent.alert('Not a valid change request', 'WarningMsg')
+        self.parent.alert('Nothing we can change', 'WarningMsg')

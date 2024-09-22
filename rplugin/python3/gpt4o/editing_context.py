@@ -20,7 +20,7 @@ Input JSON:
 Current Cursor:
 {"file":"hello.py","line":2,"col":5}
 
-Request Changes:
+User Instruction:
 1. Implement the `main` function.
 
 Output the changes in the specified JSON format.
@@ -72,7 +72,7 @@ class EditingContext:
                 for diag in self.diagnostics
             ])
 
-        table['Request Changes'] = change
+        table['User Instruction'] = change
 
         question = ''.join(f'{key}:\n{value}\n\n' for key, value in table.items())
         question += 'Output the changes in the specified JSON format.'
