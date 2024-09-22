@@ -35,29 +35,43 @@ class ContextSimplifier:
         assert len(embeds) == len(chunks)
         current_embed = embeds.pop(0)
 
-        similiarities: List[float] = []
-        for embed in embeds:
-            similiarities.append(self.cosine_similiarity(current_embed, embed))
+        # similiarities: List[tuple[float, File]] = []
+        # for embed, file in zip(embeds, other_files):
+        #     similiarity = self.cosine_similiarity(current_embed, embed)
+        #     similiarities.append((similiarity, file))
+        # similiarities.sort(key=lambda x: x[0], reverse=True) # large similiarities goes first
 
+        relevant_files: List[File] = []
+        for embed, file in zip(embeds, other_files):
+            similiarity = self.cosine_similiarity(current_embed, embed)
+            print(file.path, similiarity)
+            if similiarity >= 0.4:
+                relevant_files.append(file)
+        relevant_files.append(current_file)
+
+        context.files = relevant_files
         return context
 
 class TestContextSimplifier(unittest.TestCase):
     def setUp(self):
-        from gpt4o.embed_provider import EmbedProviderFastEmbed
-        self.embed = EmbedProviderFastEmbed()
+        from gpt4o.embed_provider import EmbedProviderOpenAI
+        self.embed = EmbedProviderOpenAI()
         self.simplifier = ContextSimplifier(self.embed)
 
     def test_simplify(self):
         context = EditingContext(
             cursor=Cursor('test.py', 2, 3),
             files=[
-                File('test.py', ['x = 5', 'y = 10']),
-                File('other.py', ['a = 1', 'b = 2']),
-                File('another.py', ['i = 7', 'j = 8']),
+                File('test.py', ['This is a test file for CI purpose.']),
+                File('assignments.py', ['a = 1', 'b = 2', 'c = 3']),
+                File('ci_check.py', ['def test():', '    do_ci_checks()']),
+                File('random.py', ['def test():', '    randomness_validation()']),
+                File('dummy_check.py', ['This is a dummy check file for test. No matter what. Well, you must be worrying about this novel book...']),
+                File('novel_book.py', ['Previously on Lost: The tainted soul was frustrated by entangled love.']),
             ])
 
         simplified = self.simplifier.simplify(context)
-        print(simplified)
+        self.assertEqual(simplified.files, [File(path='ci_check.py', content=['def test():', '    do_ci_checks()']), File(path='dummy_check.py', content=['This is a dummy check file for test. No matter what. Well, you must be worrying about this novel book...']), File(path='test.py', content=['This is a test file for CI purpose.'])])
 
 if __name__ == '__main__':
     unittest.main()

@@ -45,6 +45,7 @@ class TestChatProvider(unittest.TestCase):
 @dataclass
 class OpenAIChatConfig:
     force_json_supported: Optional[bool] = None
+
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     organization: Optional[str] = None
@@ -69,6 +70,7 @@ class ChatProvider(ABC):
 class ChatProviderOpenAI(ChatProvider):
     def __init__(self):
         self.__config = OpenAIChatConfig()
+        self.__client = None
 
     def get_config(self) -> OpenAIChatConfig:
         return self.__config
@@ -87,19 +89,21 @@ class ChatProviderOpenAI(ChatProvider):
         return supported
 
     def query_prompt(self, prompt, *, force_json = False, seed = None):
-        import openai
 
         if force_json and not self.is_force_json_supported():
             prompt.question = f'{prompt.question} {ENSURE_JSON_COMPATIBLE}'
             force_json = False
 
-        self.__client = openai.OpenAI(
-            api_key=self.__config.api_key,
-            base_url=self.__config.base_url,
-            organization=self.__config.organization,
-            project=self.__config.project,
-            timeout=self.__config.timeout,
-        )
+        if self.__client is None:
+            import openai
+            self.__client = openai.OpenAI(
+                api_key=self.__config.api_key,
+                base_url=self.__config.base_url,
+                organization=self.__config.organization,
+                project=self.__config.project,
+                timeout=self.__config.timeout,
+            )
+
         completion = self.__client.chat.completions.create(
             model=self.__config.model,
             temperature=self.__config.temperature,
