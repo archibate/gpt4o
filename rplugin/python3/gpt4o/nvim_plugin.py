@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 import neovim.api
-from typing import Any
+from typing import Any, List
 
 from gpt4o.editing_context import EditingContext
 from gpt4o.chat_provider import ChatProviderOpenAI
 from gpt4o.response_parser import ResponseParser
 from gpt4o.types import File, Cursor, Prompt
 from gpt4o.operations import OperationVisitor
-from gpt4o.resources import NVIM_BUF_TYPE_MAPS
+from gpt4o.resources import NVIM_BUF_TYPE_MAPS, NVIM_BUF_TYPE_BLACKLIST
 
 @neovim.plugin
 class NvimPlugin:
@@ -38,10 +38,21 @@ class NvimPlugin:
                 return buffer
         raise ValueError(f'Could not find buffer with path {repr(path)}')
 
-    def get_files(self) -> list[File]:
-        files: list[File] = []
+    def polish_buffer_content(self, content: List[str]) -> List[str]:
+        while len(content) and content[-1].strip() == '':
+            content.pop(-1)
+        content.append('')
+        return content
+
+    def get_files(self) -> List[File]:
+        files: List[File] = []
         for buffer in self.nvim.buffers:
-            file = File(path=self.get_buffer_path(buffer), content=buffer[:])
+            buftype = buffer.options['buftype']
+            if buftype in NVIM_BUF_TYPE_BLACKLIST:
+                continue
+            content = self.polish_buffer_content(buffer[:])
+            path = self.get_buffer_path(buffer)
+            file = File(path=path, content=content)
             files.append(file)
         return files
 
@@ -60,7 +71,7 @@ class NvimPlugin:
         return prompt
 
     @neovim.command('GPTInfo', nargs='*', range=True)
-    def on_GPTInfo(self, args: list[str], range: tuple[int, int]):
+    def on_GPTInfo(self, args: List[str], range: tuple[int, int]):
         question = ' '.join(args)
         _ = range
 
@@ -69,7 +80,7 @@ class NvimPlugin:
         self.alert(prompt.question, 'INFO')
 
     @neovim.command('GPTEdit', nargs='*', range=True)
-    def on_GPTEdit(self, args: list[str], range: tuple[int, int]):
+    def on_GPTEdit(self, args: List[str], range: tuple[int, int]):
         question = ' '.join(args)
         _ = range
 

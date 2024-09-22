@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Type
+from typing import Type, List
 
 class Operation(ABC):
     @abstractmethod
@@ -12,7 +12,7 @@ class OperationReplace(Operation):
     file: str
     line_start: int
     line_end: int
-    content: list[str]
+    content: List[str]
 
     def accept(self, visitor):
         visitor.visit_replace(self)
@@ -30,7 +30,7 @@ class OperationDelete(Operation):
 class OperationAppend(Operation):
     file: str
     line: int
-    content: list[str]
+    content: List[str]
 
     def accept(self, visitor):
         visitor.visit_append(self)

@@ -1,5 +1,6 @@
 import unittest
 from dataclasses import dataclass
+from typing import List
 
 from gpt4o.types import File, Cursor, Prompt
 from gpt4o.utils import json_dumps
@@ -27,7 +28,7 @@ Output the changes in the specified JSON format.
 
 @dataclass
 class EditingContext:
-    files: list[File]
+    files: List[File]
     cursor: Cursor
 
     @classmethod

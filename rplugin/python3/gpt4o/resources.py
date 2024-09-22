@@ -48,6 +48,10 @@ NVIM_BUF_TYPE_MAPS = {
     'toggleterm': 'terminal',
 }
 
+NVIM_BUF_TYPE_BLACKLIST = [
+    'nofile',
+]
+
 DEFAULT_CHANGE_REQUEST = r'''
 Fix, complete or continue writing.
 '''.strip()
