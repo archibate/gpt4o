@@ -37,7 +37,7 @@ Input JSON:
 [{"file":"example.py","content":{"1":"def example():","2":"    pass"}}]
 
 Request Changes:
-1. Give me some quick advice on learning Python.
+1. What is the weather today?
 
 Output JSON:
 {"operation":"nop"}

@@ -63,11 +63,12 @@ class NvimPlugin:
         for buffer in self.nvim.buffers:
             buftype = buffer.options['buftype']
             if buftype == 'nofile':
-                if len(buffer) == 0 or buffer[0] == '':
-                    continue
-                else:
-                    buftype = buffer.options['filetype']
-                    buftype = NVIM_FILE_TYPE_MAPS.get(buftype, buftype)
+                continue
+                # if len(buffer) == 0 or buffer[0] == '':
+                #     continue
+                # else:
+                #     buftype = buffer.options['filetype']
+                #     buftype = NVIM_FILE_TYPE_MAPS.get(buftype, buftype)
             content = self.polish_buffer_content(buffer[:])
             path = self.get_buffer_path(buffer)
             file = File(path=path, content=content)
