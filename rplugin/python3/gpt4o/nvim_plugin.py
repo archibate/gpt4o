@@ -16,10 +16,20 @@ class NvimPlugin:
         self.provider = ChatProviderOpenAI()
 
     def alert(self, message: str | Any, level: str = 'INFO'):
-        # TODO: use NVIM_PYTHON_LOG_FILE instead?
         if not isinstance(message, str):
             message = repr(message)
         self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level.upper()})')
+        self.log(f'{level}: {message}')
+
+    def log(self, message: str | Any):
+        if not isinstance(message, str):
+            message = repr(message)
+        if '\n' in message:
+            message = f'{"="*12}\n{message}\n{"="*12}\n'
+        else:
+            message = f'{message}\n'
+        with open('/tmp/gpt4o.log', 'a') as f:
+            f.write(message)
 
     def get_buffer_path(self, buffer: neovim.api.Buffer) -> str:
         buftype = buffer.options['buftype']
@@ -41,7 +51,7 @@ class NvimPlugin:
     def polish_buffer_content(self, content: List[str]) -> List[str]:
         while len(content) and content[-1].strip() == '':
             content.pop(-1)
-        content.append('')
+        # content.append('')
         return content
 
     def get_files(self) -> List[File]:
@@ -66,7 +76,6 @@ class NvimPlugin:
         files = self.get_files()
         cursor = self.get_cursor()
         context = EditingContext(files=files, cursor=cursor)
-
         prompt = context.compose_prompt(question)
         return prompt
 
@@ -76,7 +85,6 @@ class NvimPlugin:
         _ = range
 
         prompt = self.compose_prompt(question)
-        # self.alert(f'{prompt.instruction}\n{prompt.question}', 'INFO')
         self.alert(prompt.question, 'INFO')
 
     @neovim.command('GPTEdit', nargs='*', range=True)
@@ -86,9 +94,12 @@ class NvimPlugin:
 
         prompt = self.compose_prompt(question)
         response = self.provider.query_prompt(prompt, force_json=True, seed=42)
+        self.log(f'prompt:\n{prompt}')
 
         parser = ResponseParser()
         operation = parser.parse_response(response)
+        self.log(f'operation: {operation}')
+
         visitor = NvimOperationVisitor(self)
         operation.accept(visitor)
 
@@ -98,13 +109,17 @@ class NvimOperationVisitor(OperationVisitor):
 
     def visit_replace(self, op):
         buffer = self.parent.find_buffer_by_path(op.file)
-        buffer[op.line_start:op.line_end + 1] = op.content
+        buffer[op.line_start - 1:op.line_end] = op.content
 
     def visit_delete(self, op):
         buffer = self.parent.find_buffer_by_path(op.file)
-        buffer[op.line_start:op.line_end + 1] = []
+        # lenbuf = 4  got 5,5 -> 4,5 -> 4,4
+        if op.line_end > len(buffer):
+            op.line_end = len(buffer)
+        buffer[op.line_start - 1:op.line_end] = []
 
     def visit_append(self, op):
+        # lenbuf = 4  got 5,5 -> 4,5 -> 4,4
         buffer = self.parent.find_buffer_by_path(op.file)
         buffer[op.line:op.line] = op.content
 
