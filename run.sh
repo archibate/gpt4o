@@ -1,1 +1,2 @@
-python rplugin/python3/gpt4o.py
+cd rplugin/python3
+python -m gpt4o.editing_context
