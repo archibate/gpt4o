@@ -20,11 +20,11 @@ class NvimPlugin:
         self.context_simplifier = ContextSimplifier(self.embed_provider)
         self.response_parser = ResponseParser()
 
-    def alert(self, message: str | Any, level: str = 'INFO'):
+    def alert(self, message: str | Any, level: str | None = None):
         if not isinstance(message, str):
             message = repr(message)
         self.log(f'{level}: {message}')
-        self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level.upper()})')
+        self.nvim.api.echo([[message, level]], True, [])
 
     def log(self, message: str | Any):
         if not isinstance(message, str):
@@ -97,7 +97,7 @@ class NvimPlugin:
         _ = range
 
         prompt = self.compose_prompt(question)
-        self.alert(prompt.question, 'INFO')
+        self.alert(prompt.question)
 
     @neovim.command('GPTEdit', nargs='*', range=True)
     def on_GPTEdit(self, args: List[str], range: tuple[int, int]):
@@ -134,4 +134,4 @@ class NvimOperationVisitor(OperationVisitor):
 
     def visit_nop(self, op):
         _ = op
-        self.parent.alert('Not a valid change request', 'WARN')
+        self.parent.alert('Not a valid change request', 'WarningMsg')
