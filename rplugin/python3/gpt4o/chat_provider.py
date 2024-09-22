@@ -22,28 +22,28 @@ class TestChatProvider(unittest.TestCase):
         self.assertTrue(isinstance(answer, dict) or isinstance(answer, list))
 
     def test_is_force_json_supported(self):
-        provider: ChatProvider = ChatProviderOpenAI()
+        provider = ChatProviderOpenAI()
         provider.get_config().base_url = None
         self.assertTrue(provider.is_force_json_supported())
 
-        provider: ChatProvider = ChatProviderOpenAI()
+        provider = ChatProviderOpenAI()
         provider.get_config().base_url = 'https://api.openai.com/v1'
         self.assertTrue(provider.is_force_json_supported())
 
-        provider: ChatProvider = ChatProviderOpenAI()
+        provider = ChatProviderOpenAI()
         provider.get_config().base_url = 'https://api.openai.com/beta'
         self.assertTrue(provider.is_force_json_supported())
 
-        provider: ChatProvider = ChatProviderOpenAI()
+        provider = ChatProviderOpenAI()
         provider.get_config().base_url = 'https://api.deepseek.com/v1'
         self.assertTrue(provider.is_force_json_supported())
 
-        provider: ChatProvider = ChatProviderOpenAI()
+        provider = ChatProviderOpenAI()
         provider.get_config().base_url = 'https://api.minimax.com/v1'
         self.assertFalse(provider.is_force_json_supported())
 
 @dataclass
-class ChatConfig:
+class OpenAIChatConfig:
     force_json_supported: Optional[bool] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -59,10 +59,6 @@ class ChatConfig:
 
 class ChatProvider(ABC):
     @abstractmethod
-    def get_config(self) -> ChatConfig:
-        pass
-
-    @abstractmethod
     def query_prompt(self, prompt: Prompt,
                      *,
                      force_json: bool = False,
@@ -72,9 +68,9 @@ class ChatProvider(ABC):
 
 class ChatProviderOpenAI(ChatProvider):
     def __init__(self):
-        self.__config = ChatConfig()
+        self.__config = OpenAIChatConfig()
 
-    def get_config(self):
+    def get_config(self) -> OpenAIChatConfig:
         return self.__config
 
     def is_force_json_supported(self) -> bool:

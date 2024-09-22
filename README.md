@@ -1,6 +1,6 @@
 # gpt4o.nvim
 
-Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o ✨, offering intelligent code completion and editing to elevate developer productivity.
+Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o ✨, offering intelligent code completion and editing to elevate developer productivity. 🚄
 
 (Work In Progress ⚠️ )
 
@@ -8,19 +8,25 @@ Blazing fast 🚀 code assistant in NeoVim powered by GPT-4o ✨, offering intel
 
 ## Features
 - Context-aware suggestions 🌍
-- Project files accounted 📄
-- Recent change awareness ±
-- Real-time code completion ⚡
+- Project files accounted 🏅
+- Recent change awareness 📜
+- Real-time code completion ⏰
 - Incremental streaming result ⏳
 - Edit existing code bases 🛠️
-- Recognizing terminal errors ⚠️
+- Able to see diagnostics ⚠️
 - Fix your code in place 📝
+- Auto-move around cursor 🚦
+- Terminal output included 💻
+- Auto-embed for related files 🤓
 - Multi-language support 🌐
 - Customizable settings ⚙️
-- Lightweight and efficient 💨
+- Edit-mode and chat-mode 💬
+- Lightweight and efficient ⚡
+- Async execution for performance 💪
+- Ready to use out of the box 📦
 
 ## Installation
-To install gpt4o.nvim, first make sure you have python3 support on your NeoVim.
+To install gpt4o.nvim, first make sure you have python3 support on your NeoVim 🙌
 
 You may do this by running:
 
@@ -28,20 +34,56 @@ You may do this by running:
 python3 -m pip install neovim openai tiktoken
 ```
 
-So far, you should see `OK` in the python3 support when running `:checkhealth`.
+So far, by running `:checkhealth provider.python`, you should see:
 
-Now add the following to your `~/.config/nvim/init.vim`, with your plugin manager, [vim-plug](https://github.com/junegunn/vim-plug) for example:
+```txt
+OK: Latest pynvim is installed.
+```
+
+Now, let's install this plugin with your plguin manager ☺️
+
+### [packer.nvim](https://github.com/wbthomason/packer.nvim)
+
+Add the following to your `~/.config/nvim/init.lua`:
+
+```lua
+use {
+    'archibate/gpt4o.nvim',
+    run = ':silent! UpdateRemotePlugins',
+}
+```
+
+Then, run `:PackerInstall` in NeoVim.
+
+### [lazy.nvim](https://github.com/folke/lazy.nvim)
+
+Add the following to your `~/.config/nvim/init.lua`:
+
+### [vim-plug](https://github.com/junegunn/vim-plug)
+
+Add the following to your `~/.config/nvim/init.vim`:
 
 ```vim
 Plug 'archibate/gpt4o.nvim'
 ```
 
-Then, run `:PlugInstall` (or whatever your plugin manager name it) in NeoVim.
+Then, run `:PlugInstall` in NeoVim.
 
 After that, run `:UpdateRemotePlugins` to setup our python3 plugin (if your plugin manager didn't setup it automatically).
 
 ## LLM providers
 We are almost done! The only thing remain is to find an LLM provider.
+
+### @archibate's free service
+Worry not, this plugin can be used directly by default! No need to configure any provider.
+
+This is all thanks to the free service at https://142857.red provided by @archibate just for you 💕
+
+The default free service is only provided as a trial for people who have difficulty in registering LLM accounts. The server is deployed in Hangzhou, China, hosted by Aliyun.
+
+I will not try to save or trace any of your data! However, there is also no warranty if the poor server is being accidentally attacked or shutdown.
+
+So, for advanced users, it's suggested to configure your own LLM provider if possible. This would not only save @archibate's poor salary, but also improve your data security as well.
 
 ### OpenAI (gpt4o)
 Goto [OpenAI platform](https://platform.openai.com/api-keys), create a new API key. You want to register an OpenAI account if you haven't yet.

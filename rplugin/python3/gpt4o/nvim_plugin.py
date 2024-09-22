@@ -3,7 +3,9 @@ import neovim.api
 from typing import Any, List
 
 from gpt4o.editing_context import EditingContext
+from gpt4o.context_simplifier import ContextSimplifier
 from gpt4o.chat_provider import ChatProviderOpenAI
+from gpt4o.embed_provider import EmbedProviderFastEmbed
 from gpt4o.response_parser import ResponseParser
 from gpt4o.types import File, Cursor, Prompt
 from gpt4o.operations import OperationVisitor
@@ -13,7 +15,10 @@ from gpt4o.resources import NVIM_BUF_TYPE_MAPS, NVIM_BUF_TYPE_BLACKLIST
 class NvimPlugin:
     def __init__(self, nvim: neovim.Nvim):
         self.nvim = nvim
-        self.provider = ChatProviderOpenAI()
+        self.chat_provider = ChatProviderOpenAI()
+        self.embed_provider = EmbedProviderFastEmbed()
+        self.context_simplifier = ContextSimplifier(self.embed_provider)
+        self.response_parser = ResponseParser()
 
     def alert(self, message: str | Any, level: str = 'INFO'):
         if not isinstance(message, str):
@@ -51,7 +56,6 @@ class NvimPlugin:
     def polish_buffer_content(self, content: List[str]) -> List[str]:
         while len(content) and content[-1].strip() == '':
             content.pop(-1)
-        # content.append('')
         return content
 
     def get_files(self) -> List[File]:
@@ -76,6 +80,7 @@ class NvimPlugin:
         files = self.get_files()
         cursor = self.get_cursor()
         context = EditingContext(files=files, cursor=cursor)
+        self.context_simplifier.simplify(context)
         prompt = context.compose_prompt(question)
         return prompt
 
@@ -93,11 +98,10 @@ class NvimPlugin:
         _ = range
 
         prompt = self.compose_prompt(question)
-        response = self.provider.query_prompt(prompt, force_json=True, seed=42)
+        response = self.chat_provider.query_prompt(prompt, force_json=True, seed=42)
         self.log(f'prompt:\n{prompt}')
 
-        parser = ResponseParser()
-        operation = parser.parse_response(response)
+        operation = self.response_parser.parse_response(response)
         self.log(f'operation: {operation}')
 
         visitor = NvimOperationVisitor(self)
@@ -113,13 +117,11 @@ class NvimOperationVisitor(OperationVisitor):
 
     def visit_delete(self, op):
         buffer = self.parent.find_buffer_by_path(op.file)
-        # lenbuf = 4  got 5,5 -> 4,5 -> 4,4
         if op.line_end > len(buffer):
             op.line_end = len(buffer)
         buffer[op.line_start - 1:op.line_end] = []
 
     def visit_append(self, op):
-        # lenbuf = 4  got 5,5 -> 4,5 -> 4,4
         buffer = self.parent.find_buffer_by_path(op.file)
         buffer[op.line:op.line] = op.content
 
