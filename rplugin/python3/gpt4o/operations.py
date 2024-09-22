@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Type, List
+from typing import Type, List, Dict
 
 class Operation(ABC):
     @abstractmethod
@@ -40,7 +40,7 @@ class OperationNop(Operation):
     def accept(self, visitor):
         visitor.visit_nop(self)
 
-OPERATIONS: dict[str, Type] = dict(
+OPERATIONS: Dict[str, Type] = dict(
     replace=OperationReplace,
     delete=OperationDelete,
     append=OperationAppend,

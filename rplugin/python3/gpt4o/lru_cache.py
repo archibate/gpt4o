@@ -1,4 +1,4 @@
-from typing import Callable, Generic, Optional, TypeVar, List
+from typing import Callable, Dict, Generic, Optional, TypeVar, List
 from contextlib import contextmanager
 import unittest
 
@@ -6,10 +6,10 @@ K = TypeVar('K')
 V = TypeVar('V')
 
 class LruCache(Generic[K, V]):
-    def __init__(self):
-        self.cache: dict[K, V] = {}
+    def __init__(self, max_size: int = 1024):
+        self.max_size = max_size
+        self.cache: Dict[K, V] = {}
         self.lru: List[K] = []
-        # TODO: implement lru deletion
 
     @contextmanager
     def usage_guard(self):
@@ -18,8 +18,17 @@ class LruCache(Generic[K, V]):
     def find_entry(self, key: K) -> Optional[V]:
         return self.cache.get(key)
 
+    def is_overflow(self) -> bool:
+        return len(self.lru) > self.max_size
+
     def add_entry(self, key: K, val: V):
         self.cache[key] = val
+        if key in self.lru:
+            self.lru.remove(key)  # TODO: fix poor O(n) here
+        self.lru.append(key)
+        while self.is_overflow():
+            key = self.lru.pop()
+            del self.cache[key]
 
     def delete_entry(self, key: K):
         self.cache.pop(key, None)

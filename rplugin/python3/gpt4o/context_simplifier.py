@@ -1,19 +1,10 @@
-from dataclasses import dataclass
 import unittest
 from typing import List
 import math
 
-from gpt4o.types import File
+from gpt4o.types import File, Cursor
 from gpt4o.embed_provider import EmbedProvider
 from gpt4o.editing_context import EditingContext
-
-@dataclass
-class Chunk:
-    content: str
-    line_start: int
-    line_end: int
-    file: File
-    similiarity: float = 0
 
 class ContextSimplifier:
     def __init__(self, embed: EmbedProvider):
@@ -25,15 +16,8 @@ class ContextSimplifier:
         return sum(ai * bi for ai, bi in zip(a, b)) / denom
 
     @staticmethod
-    def split_into_chunks(file: File) -> List[Chunk]:
-        return [
-            Chunk(
-                content='\n'.join(file.content),
-                line_start=1,
-                line_end=len(file.content),
-                file=file,
-            ),
-        ]
+    def get_file_content(file: File) -> str:
+        return '\n'.join(file.content)
 
     def simplify(self, context: EditingContext) -> EditingContext:
         current_file = None
@@ -46,17 +30,34 @@ class ContextSimplifier:
                 other_files.append(file)
 
         assert current_file is not None
-        chunks = self.split_into_chunks(current_file) + sum((
-            self.split_into_chunks(file) for file in other_files),
-            start=[])
-        embeds = self.embed.batched_embed([chunk.content for chunk in chunks])
+        chunks = [self.get_file_content(current_file)] + [self.get_file_content(file) for file in other_files]
+        embeds = self.embed.batched_embed(chunks)
         assert len(embeds) == len(chunks)
         current_embed = embeds.pop(0)
 
-        for chunk, embed in zip(chunks, embeds):
-            chunk.similiarity = self.cosine_similiarity(current_embed, embed))
+        similiarities: List[float] = []
+        for embed in embeds:
+            similiarities.append(self.cosine_similiarity(current_embed, embed))
 
         return context
+
+class TestContextSimplifier(unittest.TestCase):
+    def setUp(self):
+        from gpt4o.embed_provider import EmbedProviderFastEmbed
+        self.embed = EmbedProviderFastEmbed()
+        self.simplifier = ContextSimplifier(self.embed)
+
+    def test_simplify(self):
+        context = EditingContext(
+            cursor=Cursor('test.py', 2, 3),
+            files=[
+                File('test.py', ['x = 5', 'y = 10']),
+                File('other.py', ['a = 1', 'b = 2']),
+                File('another.py', ['i = 7', 'j = 8']),
+            ])
+
+        simplified = self.simplifier.simplify(context)
+        print(simplified)
 
 if __name__ == '__main__':
     unittest.main()
