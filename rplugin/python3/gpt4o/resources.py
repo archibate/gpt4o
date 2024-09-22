@@ -20,9 +20,19 @@ User Instruction:
 1. Append `print("Second line")` to the function `example()`.
 
 Output JSON:
-{"operation":"replace","file":"example_append.py","line_start":2,"line_end":1,"content":["    print(\"Second line\")"]}
+{"operation":"append","file":"example_append.py","line":2,"content":["    print(\"Second line\")"]}
 
-### Example 3: Delete
+### Example 3: Prepend
+Input JSON:
+[{"file":"example_append.py","content":{"1":"def example():","2":"    print(time.time())"}}]
+
+User Instruction:
+1. Prepend any missing imports to the file. Place necessary empty lines.
+
+Output JSON:
+{"operation":"prepend","file":"example_append.py","line":1,"content":["import time", ""]}
+
+### Example 4: Delete
 Input JSON:
 [{"file":"example_delete.py","content":{"1":"def example1():","2":"    pass","3":"","4":"def example2():","5":"    pass"}}]
 
@@ -30,9 +40,9 @@ User Instruction:
 1. Delete the function `example1()`.
 
 Output JSON:
-{"operation":"replace","file":"example_delete.py","line_start":1,"line_end":3,"content":[]}
+{"operation":"delete","file":"example_delete.py","line_start":1,"line_end":3}
 
-### Example 4: Non-edit request
+### Example 5: Non-edit request
 Input JSON:
 [{"file":"example.py","content":{"1":"def example():","2":"    pass"}}]
 

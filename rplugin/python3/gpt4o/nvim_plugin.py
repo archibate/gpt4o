@@ -155,6 +155,10 @@ class NvimOperationVisitor(OperationVisitor):
         buffer = self.parent.find_buffer_by_path(op.file)
         buffer[op.line:op.line] = op.content
 
+    def visit_prepend(self, op):
+        buffer = self.parent.find_buffer_by_path(op.file)
+        buffer[op.line - 1:op.line - 1] = op.content
+
     def visit_nop(self, op):
         _ = op
         self.parent.alert('Nothing we can change', 'WarningMsg')
