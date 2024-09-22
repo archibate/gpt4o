@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from gpt4o.types import File, Cursor, Prompt
 from gpt4o.utils import json_dumps
-from gpt4o.resources import INSTRUCTIONS
+from gpt4o.resources import INSTRUCTIONS, DEFAULT_CHANGE_REQUEST
 
 class TestEditingContext(unittest.TestCase):
     def test_compose_files(self):
@@ -30,7 +30,16 @@ class EditingContext:
     files: list[File]
     cursor: Cursor
 
+    @classmethod
+    def __polish_change_request(cls, change: str) -> str:
+        change = change.strip() or DEFAULT_CHANGE_REQUEST
+        if not change.startswith('1.'):
+            change = f'1. {change}'
+        return change
+
     def compose_prompt(self, change: str) -> Prompt:
+        change = self.__polish_change_request(change)
+
         files = [
             {"file": file.path, "content": {str(line + 1): text for line, text in enumerate(file.content)}}
             for file in self.files
@@ -48,7 +57,7 @@ Current Cursor:
 {json_dumps(cursor)}
 
 Request Changes:
-1. {change}
+{change}
 
 Output the changes in the specified JSON format. Ensure the output JSON is raw and compatible, without any triple quotes or additional formatting. Do not explain.
         '''.strip()

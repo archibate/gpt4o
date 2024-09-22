@@ -47,3 +47,7 @@ NVIM_BUF_TYPE_MAPS = {
     'qf': 'quickfix',
     'toggleterm': 'terminal',
 }
+
+DEFAULT_CHANGE_REQUEST = r'''
+Fix, complete or continue writing.
+'''.strip()

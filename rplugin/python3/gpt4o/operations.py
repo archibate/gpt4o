@@ -9,32 +9,35 @@ class Operation(ABC):
 
 @dataclass
 class OperationReplace(Operation):
+    file: str
     line_start: int
     line_end: int
     content: list[str]
 
-    def accept(self, visitor: 'OperationVisitor'):
+    def accept(self, visitor):
         visitor.visit_replace(self)
 
 @dataclass
 class OperationDelete(Operation):
+    file: str
     line_start: int
     line_end: int
 
-    def accept(self, visitor: 'OperationVisitor'):
+    def accept(self, visitor):
         visitor.visit_delete(self)
 
 @dataclass
 class OperationAppend(Operation):
+    file: str
     line: int
     content: list[str]
 
-    def accept(self, visitor: 'OperationVisitor'):
+    def accept(self, visitor):
         visitor.visit_append(self)
 
 @dataclass
 class OperationNop(Operation):
-    def accept(self, visitor: 'OperationVisitor'):
+    def accept(self, visitor):
         visitor.visit_nop(self)
 
 OPERATIONS: dict[str, Type] = dict(
