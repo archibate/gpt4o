@@ -89,13 +89,13 @@ class ChatProviderOpenAI(ChatProvider):
         return supported
 
     def query_prompt(self, prompt, *, force_json = False, seed = None):
+        import openai
 
         if force_json and not self.is_force_json_supported():
             prompt.question = f'{prompt.question} {ENSURE_JSON_COMPATIBLE}'
             force_json = False
 
         if self.__client is None:
-            import openai
             self.__client = openai.OpenAI(
                 api_key=self.__config.api_key,
                 base_url=self.__config.base_url,

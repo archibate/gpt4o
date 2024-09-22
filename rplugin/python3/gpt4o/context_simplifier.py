@@ -23,6 +23,9 @@ class ContextSimplifier:
         current_file = None
         other_files: List[File] = []
 
+        if len(context.files) <= 2:
+            return context
+
         for file in context.files:
             if file.path == context.cursor.path:
                 current_file = file
@@ -44,7 +47,7 @@ class ContextSimplifier:
         relevant_files: List[File] = []
         for embed, file in zip(embeds, other_files):
             similiarity = self.cosine_similiarity(current_embed, embed)
-            print(file.path, similiarity)
+            # print(file.path, similiarity)
             if similiarity >= 0.4:
                 relevant_files.append(file)
         relevant_files.append(current_file)

@@ -54,9 +54,6 @@ class EditingContext:
 Input JSON:
 {json_dumps(files)}
 
-Current Cursor:
-{json_dumps(cursor)}
-
 Request Changes:
 {change}
 

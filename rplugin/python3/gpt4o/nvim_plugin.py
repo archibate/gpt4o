@@ -9,7 +9,7 @@ from gpt4o.embed_provider import EmbedProviderFastEmbed
 from gpt4o.response_parser import ResponseParser
 from gpt4o.types import File, Cursor, Prompt
 from gpt4o.operations import OperationVisitor
-from gpt4o.resources import NVIM_BUF_TYPE_MAPS, NVIM_BUF_TYPE_BLACKLIST
+from gpt4o.resources import NVIM_FILE_TYPE_MAPS
 
 @neovim.plugin
 class NvimPlugin:
@@ -23,14 +23,14 @@ class NvimPlugin:
     def alert(self, message: str | Any, level: str = 'INFO'):
         if not isinstance(message, str):
             message = repr(message)
-        self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level.upper()})')
         self.log(f'{level}: {message}')
+        self.nvim.command(f'lua vim.notify({repr(message)}, vim.log.levels.{level.upper()})')
 
     def log(self, message: str | Any):
         if not isinstance(message, str):
             message = repr(message)
         if '\n' in message:
-            message = f'{"="*12}\n{message}\n{"="*12}\n'
+            message = f'{">"*12}\n{message}\n{"<"*12}\n'
         else:
             message = f'{message}\n'
         with open('/tmp/gpt4o.log', 'a') as f:
@@ -39,7 +39,7 @@ class NvimPlugin:
     def get_buffer_path(self, buffer: neovim.api.Buffer) -> str:
         buftype = buffer.options['buftype']
         if buftype:
-            return f'[{NVIM_BUF_TYPE_MAPS.get(buftype, buftype).capitalize()}]'
+            return f'[{buftype.capitalize()}]'
         if not buffer.name:
             return '[No name]'
         path = buffer.name
@@ -62,8 +62,12 @@ class NvimPlugin:
         files: List[File] = []
         for buffer in self.nvim.buffers:
             buftype = buffer.options['buftype']
-            if buftype in NVIM_BUF_TYPE_BLACKLIST:
-                continue
+            if buftype == 'nofile':
+                if len(buffer) == 0 or buffer[0] == '':
+                    continue
+                else:
+                    buftype = buffer.options['filetype']
+                    buftype = NVIM_FILE_TYPE_MAPS.get(buftype, buftype)
             content = self.polish_buffer_content(buffer[:])
             path = self.get_buffer_path(buffer)
             file = File(path=path, content=content)
@@ -80,7 +84,9 @@ class NvimPlugin:
         files = self.get_files()
         cursor = self.get_cursor()
         context = EditingContext(files=files, cursor=cursor)
+        self.log(f'all files: {[file.path for file in files]}')
         self.context_simplifier.simplify(context)
+        self.log(f'files after simplify: {[file.path for file in files]}')
         prompt = context.compose_prompt(question)
         return prompt
 
@@ -99,10 +105,10 @@ class NvimPlugin:
 
         prompt = self.compose_prompt(question)
         response = self.chat_provider.query_prompt(prompt, force_json=True, seed=42)
-        self.log(f'prompt:\n{prompt}')
+        self.log(prompt.question)
 
         operation = self.response_parser.parse_response(response)
-        self.log(f'operation: {operation}')
+        self.log(operation)
 
         visitor = NvimOperationVisitor(self)
         operation.accept(visitor)
