@@ -4,16 +4,6 @@ from typing import Iterable
 from gpt4o.operations import OPERATIONS, Operation
 from gpt4o.utils import json_loads
 
-class TestResponseParser(unittest.TestCase):
-    def setUp(self):
-        self.parser = ResponseParser()
-
-    def test_query_prompt(self):
-        response = r'{"operation":"replace","line_start":3,"line_end":4,"content":["hello","world"]}'
-        operation = self.parser.parse_response([response])
-        self.assertEqual(operation, OPERATIONS['replace'](
-            line_start=3, line_end=4, content=['hello', 'world']))
-
 class ResponseParser:
     def __init__(self):
         pass
@@ -26,6 +16,33 @@ class ResponseParser:
         members = {key: data[key] for key in cls.__annotations__.keys()}
         operation: Operation = cls(**members)
         return operation
+
+class TestResponseParser(unittest.TestCase):
+    def setUp(self):
+        self.parser = ResponseParser()
+
+    def test_parse_replace(self):
+        response = r'{"operation":"replace","line_start":3,"line_end":4,"content":["hello","world"]}'
+        operation = self.parser.parse_response([response])
+        self.assertEqual(operation, OPERATIONS['replace'](
+            line_start=3, line_end=4, content=['hello', 'world']))
+
+    def test_parse_delete(self):
+        response = r'{"operation":"delete","line_start":3,"line_end":4}'
+        operation = self.parser.parse_response([response])
+        self.assertEqual(operation, OPERATIONS['delete'](
+            line_start=3, line_end=4))
+
+    def test_parse_insert(self):
+        response = r'{"operation":"insert","line_start":3,"content":"hello"}'
+        operation = self.parser.parse_response([response])
+        self.assertEqual(operation, OPERATIONS['insert'](line_start=3, content='hello'))
+
+    # def test_parse_move(self):
+    #     response = r'{"operation":"move","line_start":3,"line_end":4,"new_line":5}'
+    #     operation = self.parser.parse_response([response])
+    #     self.assertEqual(operation, OPERATIONS['move'](
+    #         line_start=3, line_end=4, new_line=5))
                 
 if __name__ == '__main__':
     unittest.main()
