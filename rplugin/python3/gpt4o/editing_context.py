@@ -9,7 +9,7 @@ from gpt4o.resources import INSTRUCTIONS, DEFAULT_CHANGE_REQUEST
 class TestEditingContext(unittest.TestCase):
     def test_compose_files(self):
         files = [File(path='hello.py', content=['def main():', '    pass'])]
-        cursor = Cursor(path='hello.py', line=2, col=5)
+        cursor = Cursor(path='hello.py', line=2, col=5, code='    pass')
         context = EditingContext(files=files, cursor=cursor, diagnostics=[])
         composed = context.compose_prompt('Implement the `main` function.')
         self.assertEqual(composed.instruction, INSTRUCTIONS.FILE_EDIT)
@@ -48,6 +48,7 @@ class EditingContext:
             "file": self.cursor.path,
             "line": self.cursor.line,
             "col": self.cursor.col,
+            "code": self.cursor.code,
         })
 
         table['Input JSON'] = json_dumps([

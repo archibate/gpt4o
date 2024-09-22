@@ -11,6 +11,7 @@ class Cursor:
     path: str
     line: int
     col: int
+    code: str
 
 @dataclass
 class Diagnostic:

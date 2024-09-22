@@ -98,7 +98,8 @@ class NvimPlugin:
     def get_cursor(self) -> Cursor:
         line, col = self.nvim.current.window.cursor
         path = self.get_buffer_path(self.nvim.current.buffer)
-        cursor = Cursor(path=path, line=line, col=col + 1)
+        code = self.nvim.current.buffer[line - 1]
+        cursor = Cursor(path=path, line=line, col=col + 1, code=code)
         return cursor
 
     def compose_prompt(self, question: str) -> Prompt:

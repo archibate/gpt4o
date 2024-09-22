@@ -52,7 +52,7 @@ class OpenAIChatConfig:
     project: Optional[str] = None
     timeout: Optional[float] = None
 
-    model: str = 'gpt-4o-mini'
+    model: str = 'gpt-4o'
     temperature: Optional[float] = 0.0
     frequency_penalty: Optional[float] = None
     presence_penalty: Optional[float] = None
