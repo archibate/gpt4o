@@ -14,11 +14,11 @@ class TestEditingContext(unittest.TestCase):
         composed = context.compose_prompt('Implement the `main` function.')
         self.assertEqual(composed.instruction, INSTRUCTIONS.FILE_EDIT)
         self.assertEqual(composed.question, r'''
-Input JSON:
-[{"file":"hello.py","content":{"line":1,"text":"def main():","line":2,"text":"    pass"}}]
-
 Current Cursor:
-{"file":"hello.py","line":2,"col":5}
+{"file":"hello.py","line":2,"col":5,"code":"    pass"}
+
+Input JSON:
+[{"file":"hello.py","content":[{"line":1,"text":"def main():"},{"line":2,"text":"    pass"}]}]
 
 User Instruction:
 1. Implement the `main` function.
@@ -44,6 +44,14 @@ class EditingContext:
 
         table: Dict[str, str] = {}
 
+        # table['Related context'] = json_dumps([
+        #     {
+        #         "file": file.path,
+        #         "content": '\n'.join(file.content),
+        #     }
+        #     for file in self.files
+        # ])
+
         table['Current Cursor'] = json_dumps({
             "file": self.cursor.path,
             "line": self.cursor.line,
@@ -64,19 +72,12 @@ class EditingContext:
             for file in self.files
         ])
 
-        table['Input JSON'] = json_dumps([
-            {
-                "file": file.path,
-                "content": '\n'.join(file.content),
-            }
-            for file in self.files
-        ])
-
         if self.diagnostics:
             table['Diagnostics'] = json_dumps([
                 {
                     "type": diag.type,
                     "message": diag.message,
+                    "file": diag.file,
                     "line": diag.line,
                     "col": diag.col,
                     "code": diag.code,

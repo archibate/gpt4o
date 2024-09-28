@@ -63,7 +63,7 @@ class TestContextSimplifier(unittest.TestCase):
 
     def test_simplify(self):
         context = EditingContext(
-            cursor=Cursor('test.py', 2, 3),
+            cursor=Cursor('test.py', 2, 3, 'This is a test file for CI purpose.'),
             files=[
                 File('test.py', ['This is a test file for CI purpose.']),
                 File('assignments.py', ['a = 1', 'b = 2', 'c = 3']),
@@ -71,7 +71,9 @@ class TestContextSimplifier(unittest.TestCase):
                 File('random.py', ['def test():', '    randomness_validation()']),
                 File('dummy_check.py', ['This is a dummy check file for test. No matter what. Well, you must be worrying about this novel book...']),
                 File('novel_book.py', ['Previously on Lost: The tainted soul was frustrated by entangled love.']),
-            ])
+            ],
+            diagnostics=[],
+        )
 
         simplified = self.simplifier.simplify(context)
         self.assertEqual(simplified.files, [File(path='ci_check.py', content=['def test():', '    do_ci_checks()']), File(path='dummy_check.py', content=['This is a dummy check file for test. No matter what. Well, you must be worrying about this novel book...']), File(path='test.py', content=['This is a test file for CI purpose.'])])

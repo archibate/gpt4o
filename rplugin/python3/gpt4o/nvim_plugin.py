@@ -10,7 +10,6 @@ from gpt4o.embed_provider import EmbedProviderFastEmbed
 from gpt4o.response_parser import ResponseParser
 from gpt4o.types import Diagnostic, File, Cursor, Prompt
 from gpt4o.operations import OperationVisitor
-from gpt4o.utils import json_dumps, json_loads
 
 @neovim.plugin
 class NvimPlugin:
@@ -61,11 +60,13 @@ class NvimPlugin:
         return content
 
     def get_diagnostics(self) -> List[Diagnostic]:
-        diagnostics = json_loads(self.nvim.call('luaeval', 'vim.fn.json_encode(vim.lsp.diagnostic.get_line_diagnostics())'))
+        diagnostics = self.nvim.call('luaeval', 'vim.diagnostic.get()')
         result = []
         for diag in diagnostics:
-            line = diag['range']['start']['line'] + 1
-            col = diag['range']['start']['character'] + 1
+            bufnr = diag['bufnr']
+            file = self.get_buffer_path(self.nvim.buffers[bufnr])
+            line = diag['lnum'] + 1
+            col = diag['col'] + 1
             code = self.nvim.current.buffer[line - 1:line]
             code = '\n'.join(code)
             message = diag['message']
@@ -73,6 +74,7 @@ class NvimPlugin:
             result.append(Diagnostic(
                 type=type,
                 message=message,
+                file=file,
                 line=line,
                 col=col,
                 code=code,

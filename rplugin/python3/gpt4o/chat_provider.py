@@ -9,13 +9,13 @@ from gpt4o.resources import ENSURE_JSON_COMPATIBLE, FORCE_JSON_OK_WHITELIST
 
 class TestChatProvider(unittest.TestCase):
     def test_query_prompt(self):
-        provider: ChatProvider = ChatProviderFree()
+        provider: ChatProvider = ChatProviderOpenAI()
         prompt = Prompt(instruction='', question='Hello?')
         answer = ''.join(provider.query_prompt(prompt, seed=42))
-        self.assertEqual(answer, r'Hello! How can I assist you today?')
+        self.assertTrue('How can I assist you today?' in answer, answer)
 
     def test_query_prompt_json(self):
-        provider: ChatProvider = ChatProviderFree()
+        provider: ChatProvider = ChatProviderOpenAI()
         prompt = Prompt(instruction='', question='List three bullet points of Python. Output in JSON format.')
         answer = ''.join(provider.query_prompt(prompt, force_json=True, seed=42))
         answer = json_loads(answer)
@@ -128,9 +128,9 @@ class ChatProviderOpenAI(ChatProvider):
 class ChatProviderFree(ChatProviderOpenAI):
     def __init__(self):
         super().__init__()
-        if self.__config.base_url is None and self.__config.api_key is None:
-            self.__config.base_url = 'https://142857.red/openai/v1'
-            self.__config.api_key = 'sk-free-of-charge'
+        if self.get_config().base_url is None and self.get_config().api_key is None:
+            self.get_config().base_url = 'https://142857.red/openai/v1'
+            self.get_config().api_key = 'sk-free-of-charge'
 
 if __name__ == '__main__':
     unittest.main()

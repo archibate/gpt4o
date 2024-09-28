@@ -17,6 +17,7 @@ class Cursor:
 class Diagnostic:
     type: str
     message: str
+    file: str
     line: int
     col: int
     code: str
