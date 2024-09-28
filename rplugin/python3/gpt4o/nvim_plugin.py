@@ -5,6 +5,7 @@ from typing import Any, List
 from gpt4o.editing_context import EditingContext
 from gpt4o.context_simplifier import ContextSimplifier
 from gpt4o.chat_provider import ChatProviderOpenAI
+from gpt4o.token_counter import TokenCounterOpenAI
 from gpt4o.embed_provider import EmbedProviderFastEmbed
 from gpt4o.response_parser import ResponseParser
 from gpt4o.types import Diagnostic, File, Cursor, Prompt
@@ -19,6 +20,7 @@ class NvimPlugin:
         self.embed_provider = EmbedProviderFastEmbed()
         self.context_simplifier = ContextSimplifier(self.embed_provider)
         self.response_parser = ResponseParser()
+        self.token_counter = TokenCounterOpenAI()
 
     def alert(self, message: str | Any, level: str = 'Normal'):
         if not isinstance(message, str):
@@ -119,7 +121,8 @@ class NvimPlugin:
         _ = range
 
         prompt = self.compose_prompt(question)
-        self.alert(prompt.question)
+        tokens = self.token_counter.count_token(f'{prompt.instruction}\n{prompt.question}')
+        self.alert(f'{prompt.question}\n\nTokens: {tokens}')
 
     @neovim.command('GPTEdit', nargs='*', range=True)
     def on_GPTEdit(self, args: List[str], range: tuple[int, int]):

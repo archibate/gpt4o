@@ -15,7 +15,7 @@ class TestEditingContext(unittest.TestCase):
         self.assertEqual(composed.instruction, INSTRUCTIONS.FILE_EDIT)
         self.assertEqual(composed.question, r'''
 Input JSON:
-[{"file":"hello.py","content":{"1":"def main():","2":"    pass"}}]
+[{"file":"hello.py","content":{"line":1,"text":"def main():","line":2,"text":"    pass"}}]
 
 Current Cursor:
 {"file":"hello.py","line":2,"col":5}
@@ -60,6 +60,14 @@ class EditingContext:
                         "text": text,
                     } for line, text in enumerate(file.content)
                 ],
+            }
+            for file in self.files
+        ])
+
+        table['Input JSON'] = json_dumps([
+            {
+                "file": file.path,
+                "content": '\n'.join(file.content),
             }
             for file in self.files
         ])
