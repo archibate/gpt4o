@@ -27,3 +27,10 @@ class Prompt:
     instruction: str
     question: str
     force_json: bool = False
+
+@dataclass
+class RecentChange:
+    file: str
+    line: int
+    col: int
+    change: str

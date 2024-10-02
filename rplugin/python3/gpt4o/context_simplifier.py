@@ -19,6 +19,9 @@ class ContextSimplifier:
     def get_file_content(file: File) -> str:
         return '\n'.join(file.content)
 
+    def split_file_chunks(self):
+        pass
+
     def simplify(self, context: EditingContext) -> EditingContext:
         current_file = None
         other_files: List[File] = []

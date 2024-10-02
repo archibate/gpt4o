@@ -6,9 +6,9 @@ from gpt4o.editing_context import EditingContext
 from gpt4o.context_simplifier import ContextSimplifier
 from gpt4o.chat_provider import ChatProviderOpenAI
 from gpt4o.token_counter import TokenCounterOpenAI
-from gpt4o.embed_provider import EmbedProviderFastEmbed
+from gpt4o.embed_provider import EmbedProviderOpenAI
 from gpt4o.response_parser import ResponseParser
-from gpt4o.types import Diagnostic, File, Cursor, Prompt
+from gpt4o.types import Diagnostic, File, Cursor, Prompt, RecentChange
 from gpt4o.operations import OperationVisitor
 
 @neovim.plugin
@@ -16,7 +16,7 @@ class NvimPlugin:
     def __init__(self, nvim: neovim.Nvim):
         self.nvim = nvim
         self.chat_provider = ChatProviderOpenAI()
-        self.embed_provider = EmbedProviderFastEmbed()
+        self.embed_provider = EmbedProviderOpenAI()
         self.context_simplifier = ContextSimplifier(self.embed_provider)
         self.response_parser = ResponseParser()
         self.token_counter = TokenCounterOpenAI()
@@ -58,6 +58,19 @@ class NvimPlugin:
         while len(content) and content[-1].strip() == '':
             content.pop(-1)
         return content
+
+    def get_recent_changed_buffers(self) -> List[neovim.api.Buffer]:
+        modified_buffers = [buffer for buffer in self.nvim.buffers if buffer.options['modified']]
+        return modified_buffers
+
+    # def get_recent_changes(self) -> List[RecentChange]:
+    #     recent_changes = []
+    #     for buffer in self.get_recent_changed_buffers():
+    #         path = self.get_buffer_path(buffer)
+    #         for line_num, line in enumerate(buffer, start=1):
+    #             if buffer.options['modified'] and line.strip():
+    #                 recent_changes.append(RecentChange(file=path, line=line_num, col=1, change=line))
+    #     return recent_changes
 
     def get_diagnostics(self) -> List[Diagnostic]:
         diagnostics = self.nvim.call('luaeval', 'vim.diagnostic.get()')
